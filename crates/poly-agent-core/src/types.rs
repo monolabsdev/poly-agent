@@ -127,8 +127,6 @@ pub enum FinishReason {
     Complete,
     /// Hit the maximum step count.
     StepLimitReached,
-    /// A tool call requires user approval before continuing.
-    ApprovalRequired { tool_call: ToolCall },
     /// An error occurred.
     Error(String),
 }
