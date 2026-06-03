@@ -1,0 +1,14 @@
+[package]
+name = "poly-agent-providers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+poly-agent-core = { path = "../poly-agent-core" }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }

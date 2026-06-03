@@ -1,0 +1,14 @@
+[package]
+name = "poly-agent-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+poly-agent-core = { path = "../poly-agent-core" }
+poly-agent-providers = { path = "../poly-agent-providers" }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }

@@ -1,0 +1,15 @@
+[package]
+name = "cli-basic"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+poly-agent-core = { path = "../../crates/poly-agent-core" }
+poly-agent-providers = { path = "../../crates/poly-agent-providers" }
+poly-agent-runtime = { path = "../../crates/poly-agent-runtime" }
+poly-agent-tools = { path = "../../crates/poly-agent-tools" }
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }

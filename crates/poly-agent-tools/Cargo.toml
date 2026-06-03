@@ -1,0 +1,15 @@
+[package]
+name = "poly-agent-tools"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+poly-agent-core = { path = "../poly-agent-core" }
+poly-agent-runtime = { path = "../poly-agent-runtime" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+walkdir = { workspace = true }
+tracing = { workspace = true }
