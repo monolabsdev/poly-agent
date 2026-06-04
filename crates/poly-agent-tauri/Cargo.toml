@@ -1,0 +1,23 @@
+[package]
+name = "poly-agent-tauri"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+tauri = ["dep:tauri"]
+
+[dependencies]
+poly-agent-core = { path = "../poly-agent-core" }
+poly-agent-providers = { path = "../poly-agent-providers" }
+poly-agent-runtime = { path = "../poly-agent-runtime" }
+poly-agent-tools = { path = "../poly-agent-tools" }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+uuid = { workspace = true }
+tauri = { version = "2", optional = true }

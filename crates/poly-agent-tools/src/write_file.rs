@@ -1,8 +1,16 @@
+use crate::common::{is_ignored_dir, resolve_and_validate};
 use poly_agent_core::{ToolResult, ToolRisk};
 use poly_agent_runtime::{AgentTool, ToolContext};
+use serde::Deserialize;
 
 /// Placeholder — not auto-executed. Requires user approval.
 pub struct WriteFileTool;
+
+#[derive(Deserialize)]
+struct WriteFileArgs {
+    path: String,
+    content: String,
+}
 
 #[async_trait::async_trait]
 impl AgentTool for WriteFileTool {
@@ -35,13 +43,35 @@ impl AgentTool for WriteFileTool {
         })
     }
 
-    async fn run(&self, _args: serde_json::Value, _ctx: ToolContext) -> anyhow::Result<ToolResult> {
-        // This will not be called without prior approval.
+    async fn run(&self, args: serde_json::Value, ctx: ToolContext) -> anyhow::Result<ToolResult> {
+        let args: WriteFileArgs = serde_json::from_value(args)?;
+        if is_ignored_dir(args.path.split(['/', '\\']).next().unwrap_or("")) {
+            return Ok(ToolResult {
+                tool_call_id: String::new(),
+                output: "Ignored directory".to_string(),
+                is_error: true,
+                cached: false,
+            });
+        }
+
+        let target = resolve_and_validate(&ctx.workspace, &args.path)?;
+        if let Some(parent) = target.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
+        let temp_path = target.with_extension("tmp");
+        tokio::fs::write(&temp_path, args.content).await?;
+        tokio::fs::rename(&temp_path, &target).await?;
+
         Ok(ToolResult {
             tool_call_id: String::new(),
-            output: "write_file is not yet implemented".to_string(),
-            is_error: true,
+            output: format!("Wrote {}", args.path),
+            is_error: false,
             cached: false,
         })
     }
 }
+
+#[cfg(test)]
+#[path = "write_file_tests.rs"]
+mod write_file_tests;
