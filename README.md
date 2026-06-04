@@ -1,6 +1,8 @@
 # poly-agent
 
-A minimal, low-RAM Rust agent runtime for [Poly UI](https://github.com/nicholasgriffintn/poly-ui).
+A minimal, low-RAM Rust agent runtime for [Poly UI](https://github.com/monolabsdev/poly-ui).
+
+### **Roadmap:** https://sites.plane.so/issues/9daa9cad37034deaaaf000cf84c77b73
 
 ## What this is
 
@@ -66,5 +68,3 @@ cargo clippy     # Lint
 ## License
 
 Internal — not yet published.
-
-Hello Theo
