@@ -100,6 +100,9 @@ pub struct ToolResult {
     pub tool_call_id: String,
     pub output: String,
     pub is_error: bool,
+    /// True when the result was served from a read-file cache (same path read twice).
+    #[serde(default)]
+    pub cached: bool,
 }
 
 /// Risk level of a tool. Determines whether auto-execution is allowed.
@@ -130,6 +133,8 @@ pub enum FinishReason {
         last_tool_result: String,
         tool_name: String,
     },
+    /// The model hit max_steps but the runtime synthesized a final answer from gathered context.
+    StepLimitSynthesized,
 }
 
 /// Output of a completed agent run.

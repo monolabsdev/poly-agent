@@ -41,6 +41,7 @@ impl AgentTool for WriteFileTool {
             tool_call_id: String::new(),
             output: "write_file is not yet implemented".to_string(),
             is_error: true,
+            cached: false,
         })
     }
 }

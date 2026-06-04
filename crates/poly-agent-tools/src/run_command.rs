@@ -37,6 +37,7 @@ impl AgentTool for RunCommandTool {
             tool_call_id: String::new(),
             output: "run_command is not yet implemented".to_string(),
             is_error: true,
+            cached: false,
         })
     }
 }

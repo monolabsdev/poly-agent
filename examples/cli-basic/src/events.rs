@@ -101,10 +101,11 @@ fn print_event(event: &AgentEvent) {
             eprintln!("Running: {tool_name}");
         }
         AgentEvent::ToolCallFinished { result, .. } => {
+            let tag = if result.cached { " [cached]" } else { "" };
             let single_line = result.output.replace('\n', " ");
             let preview: String = single_line.chars().take(60).collect();
             let suffix = if single_line.chars().count() > 60 { "..." } else { "" };
-            eprintln!("Result: {preview}{suffix}");
+            eprintln!("Result: {preview}{suffix}{tag}");
         }
         AgentEvent::ApprovalRequired { call, .. } => {
             eprintln!("Approval required for: {}", call.name);
@@ -114,6 +115,9 @@ fn print_event(event: &AgentEvent) {
         }
         AgentEvent::Finished { .. } => eprintln!("Finished"),
         AgentEvent::Error { error, .. } => eprintln!("Error: {error}"),
+        AgentEvent::UnknownToolRequested { tool_name, .. } => {
+            eprintln!("Unknown tool: {tool_name}");
+        }
         _ => {}
     }
 }

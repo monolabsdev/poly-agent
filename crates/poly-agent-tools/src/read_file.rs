@@ -48,6 +48,7 @@ impl AgentTool for ReadFileTool {
                 tool_call_id: String::new(),
                 output: format!("'{}' is not a file", args.path),
                 is_error: true,
+                cached: false,
             });
         }
 
@@ -71,6 +72,7 @@ impl AgentTool for ReadFileTool {
             tool_call_id: String::new(),
             output: content,
             is_error: false,
+            cached: false,
         })
     }
 }

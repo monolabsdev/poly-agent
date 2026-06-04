@@ -1,191 +1,82 @@
-use crate::control::{contains_control_tokens, strip_control_tokens};
-use crate::error::ProviderError;
-use crate::retry;
-use crate::traits::{ChatRequest, ModelAdapter, ModelResponse, ToolSpec};
-use poly_agent_core::{ChatMessage, ChatRole, ToolCall};
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use crate::{
+    error::ProviderError,
+    ollama_types::{build_messages, build_request, build_tools, response_to_model_response},
+    traits::{ChatRequest, ModelAdapter, ModelResponse},
+};
+use ollama_rs::Ollama;
+use std::pin::Pin;
+use tokio_stream::Stream;
+use url::Url;
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 
 pub struct OllamaAdapter {
-    base_url: String,
+    client: Ollama,
     model: String,
-    client: reqwest::Client,
 }
 
 impl OllamaAdapter {
     pub fn new(model: impl Into<String>, base_url: Option<String>) -> Self {
+        let client = match base_url {
+            Some(url) => Ollama::from_url(Url::parse(&url).expect("invalid Ollama base URL")),
+            None => Ollama::from_url(Url::parse(DEFAULT_OLLAMA_URL).expect("invalid default Ollama URL")),
+        };
+
         Self {
-            base_url: base_url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string()),
+            client,
             model: model.into(),
-            client: reqwest::Client::new(),
         }
     }
 
-    fn build_messages(messages: &[ChatMessage]) -> Vec<OllamaMessage> {
-        messages
-            .iter()
-            .map(|m| {
-                let role = match m.role {
-                    ChatRole::System => "system",
-                    ChatRole::User => "user",
-                    ChatRole::Assistant => "assistant",
-                    ChatRole::Tool => "tool",
-                    _ => "user",
-                };
-
-                let tool_calls = if m.tool_calls.is_empty() {
-                    None
-                } else {
-                    Some(
-                        m.tool_calls
-                            .iter()
-                            .map(|tc| OllamaToolCall {
-                                function: OllamaFunction {
-                                    name: tc.name.clone(),
-                                    arguments: tc.arguments.clone(),
-                                },
-                            })
-                            .collect(),
-                    )
-                };
-
-                OllamaMessage {
-                    role: role.to_string(),
-                    content: m.content.clone(),
-                    tool_calls,
-                }
-            })
-            .collect()
-    }
-
-    fn build_tools(tools: &[ToolSpec]) -> Option<Vec<OllamaTool>> {
-        if tools.is_empty() {
-            return None;
-        }
-        Some(
-            tools
-                .iter()
-                .map(|t| OllamaTool {
-                    r#type: "function".to_string(),
-                    function: OllamaToolFunction {
-                        name: t.name.clone(),
-                        description: t.description.clone(),
-                        parameters: t.parameters.clone(),
-                    },
-                })
-                .collect(),
+    pub(crate) fn build_chat_request(&self, request: &ChatRequest) -> ollama_rs::generation::chat::request::ChatMessageRequest {
+        build_request(
+            self.model.clone(),
+            build_messages(&request.messages),
+            build_tools(&request.tools),
         )
     }
 
-    fn parse_response(body: OllamaResponse) -> Result<ModelResponse, ProviderError> {
-        if let Some(tool_calls) = body.message.tool_calls {
-            if !tool_calls.is_empty() {
-                let calls = tool_calls
-                    .into_iter()
-                    .map(|tc| {
-                        ToolCall {
-                            id: Uuid::new_v4().to_string(),
-                            name: tc.function.name,
-                            arguments: tc.function.arguments,
-                        }
-                    })
-                    .collect();
-                return Ok(ModelResponse::ToolCalls(calls));
-            }
+    pub async fn chat_stream(
+        &self,
+        request: ChatRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<ModelResponse, ProviderError>> + Send>>, ProviderError>
+    {
+        if !request.tools.is_empty() {
+            tracing::debug!("Ollama tool-call stream fallback: using non-streaming response path");
+            let response = self.chat(request).await?;
+            return Ok(Box::pin(async_stream::stream! {
+                yield Ok(response);
+            }));
         }
 
-        let text = body.message.content;
-        if contains_control_tokens(&text) {
-            let stripped = strip_control_tokens(&text);
-            if stripped.trim().is_empty() {
-                return Err(ProviderError::MalformedModelOutput);
+        let request = self.build_chat_request(&request);
+        let stream = self.client.send_chat_messages_stream(request).await.map_err(map_ollama_error)?;
+        Ok(Box::pin(async_stream::try_stream! {
+            use tokio_stream::StreamExt;
+            tokio::pin!(stream);
+            while let Some(item) = stream.next().await {
+                let response = item.map_err(|_| ProviderError::Parse("Failed to read Ollama stream".into()))?;
+                yield response_to_model_response(response)?;
             }
-            tracing::warn!("Provider returned control tokens, stripping them");
-            Ok(ModelResponse::Text(stripped))
-        } else {
-            Ok(ModelResponse::Text(text))
-        }
+        }))
     }
 }
 
 #[async_trait::async_trait]
 impl ModelAdapter for OllamaAdapter {
     async fn chat(&self, request: ChatRequest) -> Result<ModelResponse, ProviderError> {
-        let url = format!("{}/api/chat", self.base_url.trim_end_matches('/'));
-
-        let body = OllamaRequest {
-            model: self.model.clone(),
-            messages: Self::build_messages(&request.messages),
-            tools: Self::build_tools(&request.tools),
-            stream: false,
-        };
-
-        let response = retry::send_with_retry(|| async {
-            self.client
-                .post(&url)
-                .json(&body)
-                .send()
-                .await
-                .map_err(ProviderError::Http)
-        })
-        .await?;
-
-        let response_body: OllamaResponse = response.json().await.map_err(|e| {
-            ProviderError::Parse(format!("Failed to deserialize Ollama response: {e}"))
-        })?;
-
-        Self::parse_response(response_body)
+        let request = self.build_chat_request(&request);
+        let response = self
+            .client
+            .send_chat_messages(request)
+            .await
+            .map_err(map_ollama_error)?;
+        response_to_model_response(response)
     }
 }
 
-// --- Serde models ---
-
-#[derive(Serialize)]
-struct OllamaRequest {
-    model: String,
-    messages: Vec<OllamaMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<OllamaTool>>,
-    stream: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct OllamaMessage {
-    role: String,
-    content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<OllamaToolCall>>,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct OllamaToolCall {
-    function: OllamaFunction,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct OllamaFunction {
-    name: String,
-    arguments: serde_json::Value,
-}
-
-#[derive(Serialize)]
-struct OllamaTool {
-    r#type: String,
-    function: OllamaToolFunction,
-}
-
-#[derive(Serialize)]
-struct OllamaToolFunction {
-    name: String,
-    description: String,
-    parameters: serde_json::Value,
-}
-
-#[derive(Deserialize, Debug)]
-struct OllamaResponse {
-    message: OllamaMessage,
+fn map_ollama_error(error: impl std::fmt::Display) -> ProviderError {
+    ProviderError::Parse(format!("Ollama error: {error}"))
 }
 
 #[cfg(test)]

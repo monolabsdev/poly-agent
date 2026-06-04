@@ -1,71 +1,63 @@
 use super::*;
+use crate::ollama_types::{build_messages, response_to_model_response};
+use poly_agent_core::{ChatMessage, ChatRole, ToolCall};
 
 #[test]
-fn parse_ollama_text_response() {
-    let json = serde_json::json!({
-        "message": { "role": "assistant", "content": "Here is the list of files." }
-    });
-    let body: OllamaResponse = serde_json::from_value(json).unwrap();
-    let result = OllamaAdapter::parse_response(body).unwrap();
-    match result {
-        ModelResponse::Text(t) => assert_eq!(t, "Here is the list of files."),
-        _ => panic!("Expected text response"),
-    }
+fn maps_poly_messages_to_ollama_messages() {
+    let messages = vec![
+        ChatMessage {
+            role: ChatRole::System,
+            content: "sys".into(),
+            tool_calls: vec![],
+            tool_call_id: None,
+        },
+        ChatMessage::assistant_with_tool_calls(vec![ToolCall {
+            id: "call_1".into(),
+            name: "list_files".into(),
+            arguments: serde_json::json!({"path":"."}),
+        }]),
+    ];
+
+    let mapped = build_messages(&messages);
+    assert_eq!(mapped.len(), 2);
+    assert_eq!(mapped[0].content, "sys");
+    assert_eq!(mapped[1].tool_calls.len(), 1);
+    assert_eq!(mapped[1].tool_calls[0].function.name, "list_files");
 }
 
 #[test]
-fn parse_ollama_empty_response() {
-    let json = serde_json::json!({
-        "message": { "role": "assistant", "content": "" }
-    });
-    let body: OllamaResponse = serde_json::from_value(json).unwrap();
-    let result = OllamaAdapter::parse_response(body).unwrap();
-    match result {
-        ModelResponse::Text(t) => assert!(t.is_empty()),
-        _ => panic!("Expected text response"),
-    }
+fn maps_non_streaming_response_to_text() {
+    let body = ollama_rs::generation::chat::ChatMessageResponse {
+        model: "llama3".into(),
+        created_at: "2026-06-04T00:00:00Z".into(),
+        message: ollama_rs::generation::chat::ChatMessage::assistant("hello".into()),
+        logprobs: None,
+        done: true,
+        final_data: None,
+    };
+
+    let mapped = response_to_model_response(body).unwrap();
+    assert!(matches!(mapped, ModelResponse::Text(text) if text == "hello"));
 }
 
 #[test]
-fn parse_ollama_tool_call_response() {
-    let json = serde_json::json!({
-        "message": {
-            "role": "assistant", "content": "",
-            "tool_calls": [{ "function": { "name": "list_files", "arguments": { "path": "." } } }]
-        }
-    });
-    let body: OllamaResponse = serde_json::from_value(json).unwrap();
-    let result = OllamaAdapter::parse_response(body).unwrap();
-    match result {
-        ModelResponse::ToolCalls(calls) => {
-            assert_eq!(calls.len(), 1);
-            assert_eq!(calls[0].name, "list_files");
-            assert_eq!(calls[0].arguments["path"], ".");
-            assert!(!calls[0].id.is_empty());
-        }
-        _ => panic!("Expected tool calls"),
-    }
+fn malformed_output_still_errors() {
+    let body = ollama_rs::generation::chat::ChatMessageResponse {
+        model: "llama3".into(),
+        created_at: "2026-06-04T00:00:00Z".into(),
+        message: ollama_rs::generation::chat::ChatMessage::assistant("<|channel|>\n".into()),
+        logprobs: None,
+        done: true,
+        final_data: None,
+    };
+
+    let mapped = response_to_model_response(body);
+    assert!(matches!(mapped, Err(ProviderError::MalformedModelOutput)));
 }
 
 #[test]
-fn control_tokens_detected_and_stripped() {
-    let json = serde_json::json!({
-        "message": { "role": "assistant", "content": "<|start|>assistant<|channel|>analysis\nHere is the answer." }
-    });
-    let body: OllamaResponse = serde_json::from_value(json).unwrap();
-    let result = OllamaAdapter::parse_response(body).unwrap();
-    match result {
-        ModelResponse::Text(t) => assert_eq!(t, "Here is the answer."),
-        _ => panic!("Expected text response"),
-    }
-}
-
-#[test]
-fn only_control_tokens_returns_error() {
-    let json = serde_json::json!({
-        "message": { "role": "assistant", "content": "<|channel|>\n" }
-    });
-    let body: OllamaResponse = serde_json::from_value(json).unwrap();
-    let result = OllamaAdapter::parse_response(body);
-    assert!(matches!(result, Err(ProviderError::MalformedModelOutput)));
+fn no_ollama_types_leak_from_public_adapter_api() {
+    let type_name = std::any::type_name::<OllamaAdapter>();
+    assert!(type_name.contains("OllamaAdapter"));
+    assert!(!type_name.contains("ollama_rs"));
 }

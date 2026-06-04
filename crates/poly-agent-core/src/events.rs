@@ -38,6 +38,10 @@ pub enum AgentEvent {
         run_id: RunId,
         max_steps: usize,
     },
+    UnknownToolRequested {
+        run_id: RunId,
+        tool_name: String,
+    },
     Finished {
         run_id: RunId,
         text: String,

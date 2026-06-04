@@ -17,6 +17,18 @@ const CODEBASE_INTENT_PHRASES: &[&str] = &[
 /// Tools that actually mutate files on disk.
 pub const MUTATING_TOOLS: &[&str] = &["apply_patch", "write_file"];
 
+/// Tools used for codebase inspection (not cached by anti-loop guard after first call).
+pub const INSPECTION_TOOLS: &[&str] = &["inspect_project", "read_important_files"];
+
+pub fn tool_is_inspection(name: &str) -> bool {
+    INSPECTION_TOOLS.contains(&name)
+}
+
+/// Prefix added to model output when inspection tools were used, to ground claims.
+pub fn build_grounding_prefix() -> String {
+    "Based on the files inspected:".to_string()
+}
+
 /// Verbs that strongly indicate the user wants the agent to change a file.
 const EDIT_VERBS: &[&str] = &[
     "change", "edit", "update", "modify", "replace", "fix", "create", "rename", "delete", "remove",

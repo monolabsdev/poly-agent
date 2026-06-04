@@ -115,6 +115,7 @@ impl AgentTool for SearchFilesTool {
             tool_call_id: String::new(),
             output,
             is_error: false,
+            cached: false,
         })
     }
 }

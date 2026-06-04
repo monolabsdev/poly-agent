@@ -3,24 +3,51 @@ use poly_agent_core::{
     ToolRisk,
 };
 use poly_agent_providers::{ChatRequest, ModelResponse, ProviderError};
-use tokio::sync::mpsc;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
 use crate::engine::AgentRuntime;
 use crate::intent::{
-    contains_codebase_intent_phrase, is_mutating_tool, sanitise_final_text, EditIntent,
+    build_grounding_prefix, contains_codebase_intent_phrase, is_mutating_tool,
+    sanitise_final_text, tool_is_inspection, EditIntent,
 };
 use crate::tool::ToolContext;
 
-const TOOL_USE_REMINDER: &str = "CRITICAL: When the user asks about the codebase, project, directory, program, app, repo, files, architecture, or how it works, you MUST inspect the workspace using list_files or read_file before answering. Do not provide a final answer without at least one tool call.";
+const TOOL_USE_REMINDER: &str = "\
+CRITICAL: When the user asks about the codebase, project, directory, program, app, repo, files, architecture, or how it works, you MUST inspect the workspace before answering.
 
-const DEFAULT_SYSTEM_PROMPT: &str = "You are a helpful, careful coding agent.\n\
+Strategy for codebase summaries:
+1. Call inspect_project first to get the high-level project structure.
+2. Call read_important_files to read README, metadata, key entry points.
+3. After 2-3 calls total, summarize using gathered evidence.
+Do not inspect every module unless specifically asked. Gather evidence then answer.";
+
+const VALID_TOOL_NAMES: &[&str] = &[
+    "list_files", "read_file", "search_files", "propose_edit", "apply_patch", "write_file", "run_command",
+    "inspect_project", "read_important_files",
+];
+
+fn build_system_prompt(max_steps: usize) -> String {
+    format!(
+        "You are a helpful, careful coding agent.\n\
+\n\
+Available tools: {}\n\
+Never invent tool names. Only use tools from this list.\n\
 \n\
 Tool selection rules:\n\
-- For questions about the project, summaries, explanations, or other READ-ONLY tasks, use read_file, list_files, or search_files. Do not invent file contents.\n\
+- For questions about the project, summaries, explanations, or other READ-ONLY tasks, use inspect_project, read_important_files, read_file, list_files, or search_files. Do not invent file contents.\n\
 - When the user asks to change, edit, update, modify, replace, fix, create, rename, delete, or otherwise alter a file, you MUST use a file-mutation tool. Prefer `apply_patch` for small exact text replacements. Use `propose_edit` first when the change is broad or needs review. Never describe a change as done unless a mutating tool (apply_patch or write_file) actually succeeded.\n\
 - If the user names a file path explicitly (e.g., README.md, package.json, src/main.rs), you may call read_file directly on it instead of calling list_files first.\n\
-- If a tool requires approval, surface that to the user instead of pasting the whole rewritten file in your reply.\n";
+- If a tool requires approval, surface that to the user instead of pasting the whole rewritten file in your reply.\n\
+\n\
+Tool budget: You have up to {} model calls. Use tools efficiently. \
+Stop once you have enough information to produce the final answer.",
+        VALID_TOOL_NAMES.join(", "),
+        max_steps,
+    )
+}
 
 struct RunContext {
     run_id: Uuid,
@@ -32,6 +59,8 @@ struct RunContext {
     max_steps: usize,
     max_context_messages: usize,
     max_tool_output_bytes: usize,
+    tool_cache: Arc<Mutex<HashMap<(String, String), String>>>,
+    empty_dirs: Arc<Mutex<HashSet<String>>>,
 }
 
 enum StepResult {
@@ -61,6 +90,8 @@ impl AgentRuntime {
             max_steps: input.limits.max_steps,
             max_context_messages: input.limits.max_context_messages,
             max_tool_output_bytes: input.limits.max_tool_output_bytes,
+            tool_cache: Arc::new(Mutex::new(HashMap::new())),
+            empty_dirs: Arc::new(Mutex::new(HashSet::new())),
         };
 
         let mut state = RunState {
@@ -69,6 +100,9 @@ impl AgentRuntime {
             any_mutating_requested: false,
             tool_call_count: 0,
             last_tool_result: None,
+            inspection_tools_used: false,
+            unknown_tool_retried: None,
+            repeated_unknown_tool: false,
         };
 
         for step in 0..ctx.max_steps {
@@ -79,6 +113,7 @@ impl AgentRuntime {
             }
         }
 
+        // Step limit reached — attempt synthesis before giving up.
         let _ = ctx
             .event_tx
             .send(AgentEvent::StepLimitReached {
@@ -86,6 +121,39 @@ impl AgentRuntime {
                 max_steps: ctx.max_steps,
             })
             .await;
+
+        if let Some(output) = self.attempt_synthesis(&ctx, &state).await {
+            let _ = ctx
+                .event_tx
+                .send(AgentEvent::Finished {
+                    run_id: ctx.run_id,
+                    text: output.text.clone(),
+                })
+                .await;
+            return Ok(output);
+        }
+
+        // Fallback: partial answer with last tool preview.
+        if let Some((tool_name, output)) = state.last_tool_result {
+            let preview: String = output.chars().take(200).collect();
+            let cached_count = ctx.tool_cache.lock().await.len();
+            let partial = AgentOutput {
+                run_id: ctx.run_id,
+                text: format!(
+                    "Reached step limit ({}).\n\nInspected {} items via tool caches.\nLast tool '{}' returned:\n{}",
+                    ctx.max_steps, cached_count, tool_name, preview
+                ),
+                finish_reason: FinishReason::StepLimitReached,
+            };
+            let _ = ctx
+                .event_tx
+                .send(AgentEvent::Finished {
+                    run_id: ctx.run_id,
+                    text: partial.text.clone(),
+                })
+                .await;
+            return Ok(partial);
+        }
 
         Ok(AgentOutput {
             run_id: ctx.run_id,
@@ -98,7 +166,7 @@ impl AgentRuntime {
         let mut messages = vec![
             ChatMessage {
                 role: ChatRole::System,
-                content: DEFAULT_SYSTEM_PROMPT.to_string(),
+                content: build_system_prompt(ctx.max_steps),
                 tool_calls: Vec::new(),
                 tool_call_id: None,
             },
@@ -261,6 +329,68 @@ impl AgentRuntime {
         Err(AgentError::Provider(error.to_string()))
     }
 
+    /// Called after max_steps is reached. Injects a synthesis prompt with no tools,
+    /// asks the model to produce its best final answer from gathered context.
+    async fn attempt_synthesis(
+        &self,
+        ctx: &RunContext,
+        state: &RunState,
+    ) -> Option<AgentOutput> {
+        let mut messages = state.messages.clone();
+        let prefix = if state.inspection_tools_used {
+            build_grounding_prefix()
+        } else {
+            String::new()
+        };
+        let synthesis_prompt = format!(
+            "{}\n\n{}You have reached the tool-use budget. Stop calling tools and produce the best final answer using the information already gathered.",
+            if !prefix.is_empty() { &prefix } else { "" },
+            if !prefix.is_empty() { "\n" } else { "" },
+        );
+        messages.push(ChatMessage::user(&synthesis_prompt));
+        let window = AgentRuntime::context_window(&messages, ctx.max_context_messages);
+        let request = ChatRequest {
+            messages: window,
+            tools: Vec::new(),
+        };
+
+        let _ = ctx
+            .event_tx
+            .send(AgentEvent::ModelCallStarted {
+                run_id: ctx.run_id,
+                step: ctx.max_steps,
+            })
+            .await;
+
+        match self.adapter.chat(request).await {
+            Ok(ModelResponse::Text(text)) => {
+                let _ = ctx
+                    .event_tx
+                    .send(AgentEvent::ModelCallFinished {
+                        run_id: ctx.run_id,
+                        step: ctx.max_steps,
+                    })
+                    .await;
+                Some(AgentOutput {
+                    run_id: ctx.run_id,
+                    text,
+                    finish_reason: FinishReason::StepLimitSynthesized,
+                })
+            }
+            Ok(ModelResponse::ToolCalls(_)) => {
+                let _ = ctx
+                    .event_tx
+                    .send(AgentEvent::ModelCallFinished {
+                        run_id: ctx.run_id,
+                        step: ctx.max_steps,
+                    })
+                    .await;
+                None
+            }
+            Err(_) => None,
+        }
+    }
+
     async fn process_response(
         &self,
         response: ModelResponse,
@@ -305,7 +435,27 @@ impl AgentRuntime {
                 }))
             }
             ModelResponse::ToolCalls(calls) => {
-                self.execute_tool_calls(calls, ctx, state).await
+                let result = self.execute_tool_calls(calls, ctx, state).await;
+                if state.repeated_unknown_tool {
+                    let name = state.unknown_tool_retried.clone().unwrap_or_default();
+                    let msg = format!(
+                        "Model repeatedly requested unknown tool '{name}'. Available: {}",
+                        VALID_TOOL_NAMES.join(", ")
+                    );
+                    let _ = ctx
+                        .event_tx
+                        .send(AgentEvent::Finished {
+                            run_id: ctx.run_id,
+                            text: msg.clone(),
+                        })
+                        .await;
+                    return Ok(StepResult::Finished(AgentOutput {
+                        run_id: ctx.run_id,
+                        text: msg,
+                        finish_reason: FinishReason::Error("Repeated unknown tool".to_string()),
+                    }));
+                }
+                result
             }
         }
     }
@@ -352,19 +502,61 @@ impl AgentRuntime {
         let tool = match self.tools.get(&call.name) {
             Some(t) => t,
             None => {
-                let err = ToolResult {
-                    tool_call_id: call.id.clone(),
-                    output: format!("Tool '{}' not found", call.name),
-                    is_error: true,
-                };
+                // Emit unknown tool event.
+                let _ = ctx
+                    .event_tx
+                    .send(AgentEvent::UnknownToolRequested {
+                        run_id: ctx.run_id,
+                        tool_name: call.name.clone(),
+                    })
+                    .await;
+
+                if state.unknown_tool_retried.as_deref() == Some(&call.name) {
+                    // Second time: fail cleanly.
+                    state.repeated_unknown_tool = true;
+                    let msg = format!(
+                        "Tool '{}' does not exist. Available tools are: {}. Stopping.",
+                        call.name,
+                        VALID_TOOL_NAMES.join(", ")
+                    );
+                    state
+                        .messages
+                        .push(ChatMessage::tool_result(&call.id, &msg));
+                    let _ = ctx
+                        .event_tx
+                        .send(AgentEvent::ToolCallFinished {
+                            run_id: ctx.run_id,
+                            result: ToolResult {
+                                tool_call_id: call.id.clone(),
+                                output: msg,
+                                is_error: true,
+                                cached: false,
+                            },
+                        })
+                        .await;
+                    return false;
+                }
+
+                // First time: corrective message, retry allowed.
+                state.unknown_tool_retried = Some(call.name.clone());
+                let corrective = format!(
+                    "Tool '{}' does not exist. Available tools are: {}. Never invent tool names.",
+                    call.name,
+                    VALID_TOOL_NAMES.join(", ")
+                );
                 state
                     .messages
-                    .push(ChatMessage::tool_result(&call.id, &err.output));
+                    .push(ChatMessage::tool_result(&call.id, &corrective));
                 let _ = ctx
                     .event_tx
                     .send(AgentEvent::ToolCallFinished {
                         run_id: ctx.run_id,
-                        result: err,
+                        result: ToolResult {
+                            tool_call_id: call.id.clone(),
+                            output: corrective,
+                            is_error: true,
+                            cached: false,
+                        },
                     })
                     .await;
                 return false;
@@ -396,6 +588,7 @@ impl AgentRuntime {
                 tool_call_id: call.id.clone(),
                 output: "Tool execution denied by user.".to_string(),
                 is_error: true,
+                cached: false,
             };
             state
                 .messages
@@ -418,6 +611,59 @@ impl AgentRuntime {
         ctx: &RunContext,
         state: &mut RunState,
     ) {
+        let is_inspection_tool = tool_is_inspection(&call.name);
+
+        let cache_key = (
+            call.name.clone(),
+            serde_json::to_string(&call.arguments).unwrap_or_default(),
+        );
+
+        // --- Check anti-loop guard: skip cached safe tool calls ---
+        {
+            let cache = ctx.tool_cache.lock().await;
+            if cache.contains_key(&cache_key) {
+                if let Some(cached_output) = cache.get(&cache_key).cloned() {
+                    let _ = ctx
+                        .event_tx
+                        .send(AgentEvent::ToolCallStarted {
+                            run_id: ctx.run_id,
+                            tool_call_id: call.id.clone(),
+                            tool_name: call.name.clone(),
+                        })
+                        .await;
+
+                    state.tool_call_count += 1;
+                    state.last_tool_result =
+                        Some((call.name.clone(), cached_output.clone()));
+                    state.inspection_tools_used =
+                        state.inspection_tools_used || is_inspection_tool;
+
+                    let truncated = AgentRuntime::truncate_output(
+                        &cached_output,
+                        ctx.max_tool_output_bytes,
+                    );
+                    let result = ToolResult {
+                        tool_call_id: call.id.clone(),
+                        output: truncated,
+                        is_error: false,
+                        cached: true,
+                    };
+
+                    state
+                        .messages
+                        .push(ChatMessage::tool_result(&call.id, &result.output));
+                    let _ = ctx
+                        .event_tx
+                        .send(AgentEvent::ToolCallFinished {
+                            run_id: ctx.run_id,
+                            result,
+                        })
+                        .await;
+                    return;
+                }
+            }
+        }
+
         let _ = ctx
             .event_tx
             .send(AgentEvent::ToolCallStarted {
@@ -439,6 +685,7 @@ impl AgentRuntime {
                 tool_call_id: call.id.clone(),
                 output: format!("Tool error: {e}"),
                 is_error: true,
+                cached: false,
             },
         };
 
@@ -448,12 +695,33 @@ impl AgentRuntime {
 
         state.tool_call_count += 1;
         state.last_tool_result = Some((call.name.clone(), output.output.clone()));
+        state.inspection_tools_used = state.inspection_tools_used || is_inspection_tool;
+
+        // Cache successful safe tool outputs (anti-loop guard).
+        if !output.is_error {
+            let mut cache = ctx.tool_cache.lock().await;
+            cache.insert(cache_key, output.output.clone());
+        }
+
+        // Track empty directories seen by list_files.
+        if call.name == "list_files" && !output.is_error {
+            if let Some(path) = call.arguments.get("path").and_then(|v| v.as_str()) {
+                if output.output.trim().is_empty()
+                    || output.output.trim() == "[]"
+                    || output.output.trim() == "(empty)"
+                {
+                    let mut empty = ctx.empty_dirs.lock().await;
+                    empty.insert(path.to_string());
+                }
+            }
+        }
 
         let truncated = AgentRuntime::truncate_output(&output.output, ctx.max_tool_output_bytes);
         let result = ToolResult {
             tool_call_id: call.id.clone(),
             output: truncated,
             is_error: output.is_error,
+            cached: false,
         };
 
         state
@@ -480,4 +748,7 @@ struct RunState {
     any_mutating_requested: bool,
     tool_call_count: usize,
     last_tool_result: Option<(String, String)>,
+    inspection_tools_used: bool,
+    unknown_tool_retried: Option<String>,
+    repeated_unknown_tool: bool,
 }

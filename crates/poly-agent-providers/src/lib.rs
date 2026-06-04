@@ -1,5 +1,6 @@
 mod control;
 mod error;
+mod ollama_types;
 mod retry;
 mod traits;
 

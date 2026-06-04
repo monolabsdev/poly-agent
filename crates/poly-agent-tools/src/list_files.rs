@@ -80,6 +80,7 @@ impl AgentTool for ListFilesTool {
             tool_call_id: String::new(),
             output,
             is_error: false,
+            cached: false,
         })
     }
 }

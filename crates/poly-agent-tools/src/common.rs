@@ -13,13 +13,22 @@ pub const IGNORED_DIRS: &[&str] = &[
     ".turbo",
 ];
 
+/// Normalize path separators: replace backslashes with forward slashes.
+/// On Windows this converts `\` to `/` for consistent key comparisons.
+/// On Unix this is a no-op.
+pub fn normalize_separators(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
 /// Resolve `path` relative to `workspace` and ensure it stays within bounds.
 /// Returns the canonicalized path on success.
+/// Handles both Windows (`\`) and Unix (`/`) path separators consistently.
 pub fn resolve_and_validate(workspace: &Path, path: &str) -> Result<PathBuf, AgentError> {
-    let requested = if Path::new(path).is_absolute() {
-        PathBuf::from(path)
+    let normalized_path = normalize_separators(path);
+    let requested = if Path::new(&normalized_path).is_absolute() {
+        PathBuf::from(&normalized_path)
     } else {
-        workspace.join(path)
+        workspace.join(&normalized_path)
     };
 
     // Normalize by resolving components manually (canonicalize needs the path to exist).
@@ -29,7 +38,7 @@ pub fn resolve_and_validate(workspace: &Path, path: &str) -> Result<PathBuf, Age
     if !normalized.starts_with(&ws_normalized) {
         return Err(AgentError::PathTraversal(format!(
             "Path '{}' escapes workspace '{}'",
-            path,
+            normalized_path,
             workspace.display()
         )));
     }
@@ -38,7 +47,7 @@ pub fn resolve_and_validate(workspace: &Path, path: &str) -> Result<PathBuf, Age
 }
 
 /// Normalize a path by resolving `.` and `..` components without touching the filesystem.
-fn normalize_path(path: &Path) -> PathBuf {
+pub fn normalize_path(path: &Path) -> PathBuf {
     let mut components = Vec::new();
     for component in path.components() {
         match component {
@@ -106,5 +115,38 @@ mod tests {
         assert!(is_ignored_dir(".git"));
         assert!(is_ignored_dir("target"));
         assert!(!is_ignored_dir("src"));
+    }
+
+    #[test]
+    fn normalize_separators_handles_backslash() {
+        assert_eq!(normalize_separators(r"crates\foo\src\lib.rs"), "crates/foo/src/lib.rs");
+    }
+
+    #[test]
+    fn normalize_separators_preserves_forward_slash() {
+        assert_eq!(normalize_separators("crates/foo/src/lib.rs"), "crates/foo/src/lib.rs");
+    }
+
+    #[test]
+    fn resolve_and_validate_handles_backslash_paths() {
+        let ws = Path::new("/workspace/project");
+        let result = resolve_and_validate(ws, r"src\main.rs");
+        assert!(result.is_ok());
+        if cfg!(windows) {
+            // On Windows, the result may have backslashes but should be valid.
+            let p = result.unwrap();
+            assert!(p.to_string_lossy().contains("src"));
+            assert!(p.to_string_lossy().contains("main"));
+        } else {
+            assert_eq!(result.unwrap(), Path::new("/workspace/project/src/main.rs"));
+        }
+    }
+
+    #[test]
+    fn normalize_path_is_pub() {
+        // Just verify the function compiles and runs.
+        let p = normalize_path(Path::new("/a/b/../c/./d"));
+        let s = p.to_string_lossy().replace('\\', "/");
+        assert!(s.contains("a/c/d") || s == "/a/c/d", "got: {s}");
     }
 }

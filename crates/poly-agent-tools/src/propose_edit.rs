@@ -43,6 +43,7 @@ impl AgentTool for ProposeEditTool {
                 tool_call_id: String::new(),
                 output: "Ignored directory".into(),
                 is_error: true,
+                cached: false,
             });
         }
         let target = resolve_and_validate(&ctx.workspace, &args.path)?;
@@ -84,6 +85,7 @@ impl AgentTool for ProposeEditTool {
             tool_call_id: String::new(),
             output,
             is_error: false,
+            cached: false,
         })
     }
 }

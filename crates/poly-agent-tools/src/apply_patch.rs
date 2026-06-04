@@ -45,6 +45,7 @@ impl AgentTool for ApplyPatchTool {
                 tool_call_id: String::new(),
                 output: "Ignored directory".into(),
                 is_error: true,
+                cached: false,
             });
         }
         let target = resolve_and_validate(&ctx.workspace, &args.path)?;
@@ -56,6 +57,7 @@ impl AgentTool for ApplyPatchTool {
                     tool_call_id: String::new(),
                     output: "File not found".into(),
                     is_error: true,
+                    cached: false,
                 })
             }
         };
@@ -66,6 +68,7 @@ impl AgentTool for ApplyPatchTool {
                 tool_call_id: String::new(),
                 output: "Text not found".into(),
                 is_error: true,
+                cached: false,
             });
         }
         if count > 1 {
@@ -73,6 +76,7 @@ impl AgentTool for ApplyPatchTool {
                 tool_call_id: String::new(),
                 output: "Text appears multiple times".into(),
                 is_error: true,
+                cached: false,
             });
         }
         // Atomic write approach
@@ -84,6 +88,7 @@ impl AgentTool for ApplyPatchTool {
             tool_call_id: String::new(),
             output: "Applied".to_string(),
             is_error: false,
+            cached: false,
         })
     }
 }
