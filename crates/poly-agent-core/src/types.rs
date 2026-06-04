@@ -129,6 +129,11 @@ pub enum FinishReason {
     StepLimitReached,
     /// An error occurred.
     Error(String),
+    /// Model failed after successful tool calls.
+    PartialFailure {
+        last_tool_result: String,
+        tool_name: String,
+    },
 }
 
 /// Output of a completed agent run.

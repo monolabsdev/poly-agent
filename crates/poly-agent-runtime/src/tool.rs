@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use poly_agent_core::{RuntimeLimits, ToolRisk, ToolResult};
+use poly_agent_core::{RuntimeLimits, ToolResult, ToolRisk};
 
 /// Context passed to each tool invocation.
 #[derive(Debug, Clone)]
@@ -56,11 +56,14 @@ impl ToolRegistry {
 
     /// Return specs for all registered tools (for sending to the model).
     pub fn tool_specs(&self) -> Vec<poly_agent_providers::ToolSpec> {
-        self.tools.values().map(|t| poly_agent_providers::ToolSpec {
-            name: t.name().to_string(),
-            description: t.description().to_string(),
-            parameters: t.parameters_schema(),
-        }).collect()
+        self.tools
+            .values()
+            .map(|t| poly_agent_providers::ToolSpec {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                parameters: t.parameters_schema(),
+            })
+            .collect()
     }
 
     /// Number of registered tools.

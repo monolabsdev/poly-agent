@@ -18,7 +18,7 @@ impl AgentTool for ReadFileTool {
     }
 
     fn description(&self) -> &'static str {
-        "Read the contents of a file within the workspace. Large files are truncated."
+        "Read the contents of a file within the workspace. This is read-only and does not modify any files. Large files are truncated."
     }
 
     fn risk(&self) -> ToolRisk {
@@ -79,7 +79,6 @@ impl AgentTool for ReadFileTool {
 mod tests {
     use super::*;
     use poly_agent_core::RuntimeLimits;
-
 
     #[tokio::test]
     async fn read_file_respects_size_limit() {

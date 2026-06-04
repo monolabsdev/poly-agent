@@ -59,14 +59,12 @@ impl AgentTool for SearchFilesTool {
         let max_read = ctx.limits.max_file_read_bytes;
         let mut results = Vec::new();
 
-        let walker = WalkDir::new(&target)
-            .into_iter()
-            .filter_entry(|e| {
-                e.file_name()
-                    .to_str()
-                    .map(|s| !is_ignored_dir(s))
-                    .unwrap_or(true)
-            });
+        let walker = WalkDir::new(&target).into_iter().filter_entry(|e| {
+            e.file_name()
+                .to_str()
+                .map(|s| !is_ignored_dir(s))
+                .unwrap_or(true)
+        });
 
         'outer: for entry in walker.flatten() {
             if !entry.file_type().is_file() {
@@ -125,7 +123,6 @@ impl AgentTool for SearchFilesTool {
 mod tests {
     use super::*;
     use poly_agent_core::RuntimeLimits;
-
 
     #[tokio::test]
     async fn search_respects_max_results() {

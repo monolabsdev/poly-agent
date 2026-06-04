@@ -1,6 +1,10 @@
 use crate::{ChatRequest, ModelAdapter, ModelResponse, ProviderError, ToolSpec};
+use crate::{contains_control_tokens, strip_control_tokens};
 use poly_agent_core::{ChatMessage, ChatRole, ToolCall};
 use serde::{Deserialize, Serialize};
+
+const RETRYABLE_STATUS_CODES: &[u16] = &[500, 502, 503, 504];
+const MAX_RETRIES: usize = 2;
 
 /// Adapter for OpenAI-compatible chat completions API.
 pub struct OpenAICompatibleAdapter {
@@ -11,7 +15,11 @@ pub struct OpenAICompatibleAdapter {
 }
 
 impl OpenAICompatibleAdapter {
-    pub fn new(base_url: impl Into<String>, model: impl Into<String>, api_key: Option<String>) -> Self {
+    pub fn new(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        api_key: Option<String>,
+    ) -> Self {
         Self {
             base_url: base_url.into(),
             model: model.into(),
@@ -21,71 +29,104 @@ impl OpenAICompatibleAdapter {
     }
 
     fn build_messages(messages: &[ChatMessage]) -> Vec<OpenAIMessage> {
-        messages.iter().map(|m| {
-            let role = match m.role {
-                ChatRole::System => "system",
-                ChatRole::User => "user",
-                ChatRole::Assistant => "assistant",
-                ChatRole::Tool => "tool",
-            };
+        messages
+            .iter()
+            .map(|m| {
+                let role = match m.role {
+                    ChatRole::System => "system",
+                    ChatRole::User => "user",
+                    ChatRole::Assistant => "assistant",
+                    ChatRole::Tool => "tool",
+                };
 
-            let tool_calls = if m.tool_calls.is_empty() {
-                None
-            } else {
-                Some(m.tool_calls.iter().map(|tc| OpenAIToolCall {
-                    id: tc.id.clone(),
-                    r#type: "function".to_string(),
-                    function: OpenAIFunction {
-                        name: tc.name.clone(),
-                        arguments: serde_json::to_string(&tc.arguments).unwrap_or_default(),
+                let tool_calls = if m.tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(
+                        m.tool_calls
+                            .iter()
+                            .map(|tc| OpenAIToolCall {
+                                id: tc.id.clone(),
+                                r#type: "function".to_string(),
+                                function: OpenAIFunction {
+                                    name: tc.name.clone(),
+                                    arguments: serde_json::to_string(&tc.arguments)
+                                        .unwrap_or_default(),
+                                },
+                            })
+                            .collect(),
+                    )
+                };
+
+                OpenAIMessage {
+                    role: role.to_string(),
+                    content: if m.content.is_empty() {
+                        None
+                    } else {
+                        Some(m.content.clone())
                     },
-                }).collect())
-            };
-
-            OpenAIMessage {
-                role: role.to_string(),
-                content: if m.content.is_empty() { None } else { Some(m.content.clone()) },
-                tool_calls,
-                tool_call_id: m.tool_call_id.clone(),
-            }
-        }).collect()
+                    tool_calls,
+                    tool_call_id: m.tool_call_id.clone(),
+                }
+            })
+            .collect()
     }
 
     fn build_tools(tools: &[ToolSpec]) -> Option<Vec<OpenAITool>> {
         if tools.is_empty() {
             return None;
         }
-        Some(tools.iter().map(|t| OpenAITool {
-            r#type: "function".to_string(),
-            function: OpenAIToolFunction {
-                name: t.name.clone(),
-                description: t.description.clone(),
-                parameters: t.parameters.clone(),
-            },
-        }).collect())
+        Some(
+            tools
+                .iter()
+                .map(|t| OpenAITool {
+                    r#type: "function".to_string(),
+                    function: OpenAIToolFunction {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        parameters: t.parameters.clone(),
+                    },
+                })
+                .collect(),
+        )
     }
 
     fn parse_response(body: OpenAIResponse) -> Result<ModelResponse, ProviderError> {
-        let choice = body.choices.into_iter().next()
+        let choice = body
+            .choices
+            .into_iter()
+            .next()
             .ok_or_else(|| ProviderError::Parse("No choices in response".into()))?;
 
         if let Some(tool_calls) = choice.message.tool_calls {
             if !tool_calls.is_empty() {
-                let calls = tool_calls.into_iter().map(|tc| {
-                    let args = serde_json::from_str(&tc.function.arguments)
-                        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-                    ToolCall {
-                        id: tc.id,
-                        name: tc.function.name,
-                        arguments: args,
-                    }
-                }).collect();
+                let calls = tool_calls
+                    .into_iter()
+                    .map(|tc| {
+                        let args = serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                        ToolCall {
+                            id: tc.id,
+                            name: tc.function.name,
+                            arguments: args,
+                        }
+                    })
+                    .collect();
                 return Ok(ModelResponse::ToolCalls(calls));
             }
         }
 
         let text = choice.message.content.unwrap_or_default();
-        Ok(ModelResponse::Text(text))
+        if contains_control_tokens(&text) {
+            let stripped = strip_control_tokens(&text);
+            if stripped.trim().is_empty() {
+                return Err(ProviderError::MalformedModelOutput);
+            }
+            tracing::warn!("Provider returned control tokens, stripping them");
+            Ok(ModelResponse::Text(stripped))
+        } else {
+            Ok(ModelResponse::Text(text))
+        }
     }
 }
 
@@ -101,27 +142,47 @@ impl ModelAdapter for OpenAICompatibleAdapter {
             stream: false,
         };
 
-        tracing::debug!(url = %url, model = %self.model, "Sending OpenAI-compatible request");
+        let mut retry_count = 0;
+        loop {
+            tracing::debug!(url = %url, model = %self.model, "Sending OpenAI-compatible request");
 
-        let mut req = self.client.post(&url).json(&body);
-        if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
+            let mut req = self.client.post(&url).json(&body);
+            if let Some(key) = &self.api_key {
+                req = req.bearer_auth(key);
+            }
+
+            let resp = req.send().await?;
+            let status = resp.status();
+
+            if !status.is_success() && RETRYABLE_STATUS_CODES.contains(&(status.as_u16())) {
+                retry_count += 1;
+                if retry_count <= MAX_RETRIES {
+                    tracing::debug!(
+                        attempt = retry_count,
+                        status = status.as_u16(),
+                        "Retryable HTTP error, retrying with backoff"
+                    );
+                    let backoff_ms = 100 * (1 << retry_count);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+                    continue;
+                }
+            }
+
+            if !status.is_success() {
+                let body_text = resp.text().await.unwrap_or_default();
+                return Err(ProviderError::Api {
+                    status: status.as_u16(),
+                    body: body_text,
+                });
+            }
+
+            let response_body: OpenAIResponse = resp
+                .json()
+                .await
+                .map_err(|e| ProviderError::Parse(format!("Failed to deserialize response: {e}")))?;
+
+            return Self::parse_response(response_body);
         }
-
-        let resp = req.send().await?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body_text = resp.text().await.unwrap_or_default();
-            return Err(ProviderError::Api {
-                status: status.as_u16(),
-                body: body_text,
-            });
-        }
-
-        let response_body: OpenAIResponse = resp.json().await
-            .map_err(|e| ProviderError::Parse(format!("Failed to deserialize response: {e}")))?;
-
-        Self::parse_response(response_body)
     }
 }
 
@@ -284,5 +345,38 @@ mod tests {
         let body: OpenAIResponse = serde_json::from_value(json).unwrap();
         let result = OpenAICompatibleAdapter::parse_response(body);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn control_tokens_detected_and_stripped() {
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "<|start|>assistant<|channel|>commentary\nHello world."
+                }
+            }]
+        });
+        let body: OpenAIResponse = serde_json::from_value(json).unwrap();
+        let result = OpenAICompatibleAdapter::parse_response(body).unwrap();
+        match result {
+            ModelResponse::Text(t) => assert_eq!(t, "Hello world."),
+            _ => panic!("Expected text response"),
+        }
+    }
+
+    #[test]
+    fn only_control_tokens_returns_error() {
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "<|start|>assistant<|channel|>analysis"
+                }
+            }]
+        });
+        let body: OpenAIResponse = serde_json::from_value(json).unwrap();
+        let result = OpenAICompatibleAdapter::parse_response(body);
+        assert!(matches!(result, Err(ProviderError::MalformedModelOutput)));
     }
 }
