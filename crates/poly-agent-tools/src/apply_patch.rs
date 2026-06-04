@@ -6,6 +6,7 @@ use serde::Deserialize;
 pub struct ApplyPatchTool;
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct ApplyPatchArgs {
     path: String,
     expected_old_text: String,

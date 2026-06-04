@@ -7,6 +7,7 @@ pub type RunId = Uuid;
 
 /// Which LLM provider to use.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ModelProvider {
     Ollama,
     OpenAICompatible,
@@ -26,6 +27,7 @@ pub struct ModelConfig {
 /// Role in a chat conversation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ChatRole {
     System,
     User,
@@ -102,12 +104,10 @@ pub struct ToolResult {
 
 /// Risk level of a tool. Determines whether auto-execution is allowed.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ToolRisk {
-    /// Safe to auto-execute without user approval.
     Safe,
-    /// Requires explicit user approval before execution.
     RequiresApproval,
-    /// Dangerous operation — blocked by default.
     Dangerous,
 }
 
@@ -120,16 +120,12 @@ pub struct AgentInput {
     pub limits: RuntimeLimits,
 }
 
-/// Why the agent run finished.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FinishReason {
-    /// Model produced a final text response.
     Complete,
-    /// Hit the maximum step count.
     StepLimitReached,
-    /// An error occurred.
     Error(String),
-    /// Model failed after successful tool calls.
     PartialFailure {
         last_tool_result: String,
         tool_name: String,

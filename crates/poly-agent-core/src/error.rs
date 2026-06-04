@@ -1,7 +1,7 @@
 use thiserror::Error;
 
-/// Top-level errors for the agent runtime.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum AgentError {
     #[error("Provider error: {0}")]
     Provider(String),

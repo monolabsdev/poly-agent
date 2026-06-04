@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{RunId, ToolCall, ToolResult};
 
-/// Events emitted during an agent run. Designed for streaming to a frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[non_exhaustive]
 pub enum AgentEvent {
     Started {
         run_id: RunId,

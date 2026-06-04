@@ -1,9 +1,9 @@
-//! Agent runtime — the core execution loop for poly-agent.
-//!
-//! Provides `AgentRuntime`, the `AgentTool` trait, and `ToolRegistry`.
-
-mod runtime;
+mod approval;
+mod engine;
+mod intent;
+mod run;
 mod tool;
 
-pub use runtime::AgentRuntime;
+pub use engine::AgentRuntime;
+pub use intent::EditIntent;
 pub use tool::{AgentTool, ToolContext, ToolRegistry};

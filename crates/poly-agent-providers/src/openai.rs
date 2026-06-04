@@ -1,12 +1,10 @@
-use crate::{ChatRequest, ModelAdapter, ModelResponse, ProviderError, ToolSpec};
-use crate::{contains_control_tokens, strip_control_tokens};
+use crate::control::{contains_control_tokens, strip_control_tokens};
+use crate::error::ProviderError;
+use crate::retry;
+use crate::traits::{ChatRequest, ModelAdapter, ModelResponse, ToolSpec};
 use poly_agent_core::{ChatMessage, ChatRole, ToolCall};
 use serde::{Deserialize, Serialize};
 
-const RETRYABLE_STATUS_CODES: &[u16] = &[500, 502, 503, 504];
-const MAX_RETRIES: usize = 2;
-
-/// Adapter for OpenAI-compatible chat completions API.
 pub struct OpenAICompatibleAdapter {
     base_url: String,
     model: String,
@@ -37,6 +35,7 @@ impl OpenAICompatibleAdapter {
                     ChatRole::User => "user",
                     ChatRole::Assistant => "assistant",
                     ChatRole::Tool => "tool",
+                    _ => "user",
                 };
 
                 let tool_calls = if m.tool_calls.is_empty() {
@@ -142,51 +141,25 @@ impl ModelAdapter for OpenAICompatibleAdapter {
             stream: false,
         };
 
-        let mut retry_count = 0;
-        loop {
-            tracing::debug!(url = %url, model = %self.model, "Sending OpenAI-compatible request");
-
+        let response = retry::send_with_retry(|| async {
             let mut req = self.client.post(&url).json(&body);
             if let Some(key) = &self.api_key {
                 req = req.bearer_auth(key);
             }
+            req.send().await.map_err(ProviderError::Http)
+        })
+        .await?;
 
-            let resp = req.send().await?;
-            let status = resp.status();
+        let response_body: OpenAIResponse = response
+            .json()
+            .await
+            .map_err(|e| ProviderError::Parse(format!("Failed to deserialize response: {e}")))?;
 
-            if !status.is_success() && RETRYABLE_STATUS_CODES.contains(&(status.as_u16())) {
-                retry_count += 1;
-                if retry_count <= MAX_RETRIES {
-                    tracing::debug!(
-                        attempt = retry_count,
-                        status = status.as_u16(),
-                        "Retryable HTTP error, retrying with backoff"
-                    );
-                    let backoff_ms = 100 * (1 << retry_count);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
-                    continue;
-                }
-            }
-
-            if !status.is_success() {
-                let body_text = resp.text().await.unwrap_or_default();
-                return Err(ProviderError::Api {
-                    status: status.as_u16(),
-                    body: body_text,
-                });
-            }
-
-            let response_body: OpenAIResponse = resp
-                .json()
-                .await
-                .map_err(|e| ProviderError::Parse(format!("Failed to deserialize response: {e}")))?;
-
-            return Self::parse_response(response_body);
-        }
+        Self::parse_response(response_body)
     }
 }
 
-// --- Serde models for the OpenAI API ---
+// --- Serde models ---
 
 #[derive(Serialize)]
 struct OpenAIRequest {
@@ -244,139 +217,6 @@ struct OpenAIChoice {
     message: OpenAIMessage,
 }
 
-// --- Tests ---
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_text_response() {
-        let json = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "Hello! How can I help you?"
-                }
-            }]
-        });
-        let body: OpenAIResponse = serde_json::from_value(json).unwrap();
-        let result = OpenAICompatibleAdapter::parse_response(body).unwrap();
-        match result {
-            ModelResponse::Text(t) => assert_eq!(t, "Hello! How can I help you?"),
-            _ => panic!("Expected text response"),
-        }
-    }
-
-    #[test]
-    fn parse_tool_call_response() {
-        let json = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {
-                            "name": "list_files",
-                            "arguments": "{\"path\": \".\"}"
-                        }
-                    }]
-                }
-            }]
-        });
-        let body: OpenAIResponse = serde_json::from_value(json).unwrap();
-        let result = OpenAICompatibleAdapter::parse_response(body).unwrap();
-        match result {
-            ModelResponse::ToolCalls(calls) => {
-                assert_eq!(calls.len(), 1);
-                assert_eq!(calls[0].name, "list_files");
-                assert_eq!(calls[0].id, "call_123");
-                assert_eq!(calls[0].arguments["path"], ".");
-            }
-            _ => panic!("Expected tool calls"),
-        }
-    }
-
-    #[test]
-    fn parse_multiple_tool_calls() {
-        let json = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [
-                        {
-                            "id": "call_1",
-                            "type": "function",
-                            "function": {
-                                "name": "list_files",
-                                "arguments": "{\"path\": \".\"}"
-                            }
-                        },
-                        {
-                            "id": "call_2",
-                            "type": "function",
-                            "function": {
-                                "name": "read_file",
-                                "arguments": "{\"path\": \"README.md\"}"
-                            }
-                        }
-                    ]
-                }
-            }]
-        });
-        let body: OpenAIResponse = serde_json::from_value(json).unwrap();
-        let result = OpenAICompatibleAdapter::parse_response(body).unwrap();
-        match result {
-            ModelResponse::ToolCalls(calls) => {
-                assert_eq!(calls.len(), 2);
-                assert_eq!(calls[0].name, "list_files");
-                assert_eq!(calls[1].name, "read_file");
-            }
-            _ => panic!("Expected tool calls"),
-        }
-    }
-
-    #[test]
-    fn parse_empty_choices_fails() {
-        let json = serde_json::json!({ "choices": [] });
-        let body: OpenAIResponse = serde_json::from_value(json).unwrap();
-        let result = OpenAICompatibleAdapter::parse_response(body);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn control_tokens_detected_and_stripped() {
-        let json = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "<|start|>assistant<|channel|>commentary\nHello world."
-                }
-            }]
-        });
-        let body: OpenAIResponse = serde_json::from_value(json).unwrap();
-        let result = OpenAICompatibleAdapter::parse_response(body).unwrap();
-        match result {
-            ModelResponse::Text(t) => assert_eq!(t, "Hello world."),
-            _ => panic!("Expected text response"),
-        }
-    }
-
-    #[test]
-    fn only_control_tokens_returns_error() {
-        let json = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "content": "<|start|>assistant<|channel|>analysis"
-                }
-            }]
-        });
-        let body: OpenAIResponse = serde_json::from_value(json).unwrap();
-        let result = OpenAICompatibleAdapter::parse_response(body);
-        assert!(matches!(result, Err(ProviderError::MalformedModelOutput)));
-    }
-}
+#[path = "openai_tests.rs"]
+mod openai_tests;
