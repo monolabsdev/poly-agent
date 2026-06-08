@@ -82,8 +82,16 @@ impl AgentTool for InspectProjectTool {
 
         for entry in root_entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            let is_dir = entry.file_type().ok().map(|ft| ft.is_dir()).unwrap_or(false);
-            let is_file = entry.file_type().ok().map(|ft| ft.is_file()).unwrap_or(false);
+            let is_dir = entry
+                .file_type()
+                .ok()
+                .map(|ft| ft.is_dir())
+                .unwrap_or(false);
+            let is_file = entry
+                .file_type()
+                .ok()
+                .map(|ft| ft.is_file())
+                .unwrap_or(false);
 
             if is_ignored_dir(&name) || name.starts_with('.') {
                 if is_ignored_dir(&name) {
@@ -140,7 +148,10 @@ impl AgentTool for InspectProjectTool {
                         if let Some(cname) = read_crate_name(&entry.path()) {
                             important_files.insert("Cargo.toml".to_string(), serde_json::json!({"path": entry.path().to_string_lossy(), "crate_name": cname}));
                         } else {
-                            important_files.insert("Cargo.toml".to_string(), serde_json::json!({"path": entry.path().to_string_lossy()}));
+                            important_files.insert(
+                                "Cargo.toml".to_string(),
+                                serde_json::json!({"path": entry.path().to_string_lossy()}),
+                            );
                         }
                     }
                     "package.json" => {
@@ -148,14 +159,23 @@ impl AgentTool for InspectProjectTool {
                         if let Some(pname) = read_package_name(&entry.path()) {
                             important_files.insert("package.json".to_string(), serde_json::json!({"path": entry.path().to_string_lossy(), "package_name": pname}));
                         } else {
-                            important_files.insert("package.json".to_string(), serde_json::json!({"path": entry.path().to_string_lossy()}));
+                            important_files.insert(
+                                "package.json".to_string(),
+                                serde_json::json!({"path": entry.path().to_string_lossy()}),
+                            );
                         }
                     }
                     "README.md" => {
-                        important_files.insert("README.md".to_string(), serde_json::json!({"path": entry.path().to_string_lossy()}));
+                        important_files.insert(
+                            "README.md".to_string(),
+                            serde_json::json!({"path": entry.path().to_string_lossy()}),
+                        );
                     }
                     "AGENTS.md" | "CLAUDE.md" => {
-                        important_files.insert(name, serde_json::json!({"path": entry.path().to_string_lossy()}));
+                        important_files.insert(
+                            name,
+                            serde_json::json!({"path": entry.path().to_string_lossy()}),
+                        );
                     }
                     _ => {}
                 }

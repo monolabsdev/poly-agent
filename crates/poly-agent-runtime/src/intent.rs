@@ -15,13 +15,29 @@ const CODEBASE_INTENT_PHRASES: &[&str] = &[
 ];
 
 /// Tools that actually mutate files on disk.
-pub const MUTATING_TOOLS: &[&str] = &["apply_patch", "write_file"];
+pub const MUTATING_TOOLS: &[&str] = &["apply_patch", "write_file", "delete_file", "rename_file"];
 
 /// Tools used for codebase inspection (not cached by anti-loop guard after first call).
 pub const INSPECTION_TOOLS: &[&str] = &["inspect_project", "read_important_files"];
 
+/// Tools that execute shell commands inside the workspace.
+pub const COMMAND_TOOLS: &[&str] = &["run_command"];
+
+/// Tools that write file contents (creation or replacement).
+pub const FILE_WRITE_TOOLS: &[&str] = &["apply_patch", "write_file"];
+
 pub fn tool_is_inspection(name: &str) -> bool {
     INSPECTION_TOOLS.contains(&name)
+}
+
+/// True if `name` is a command-execution tool.
+pub fn is_command_tool(name: &str) -> bool {
+    COMMAND_TOOLS.contains(&name)
+}
+
+/// True if `name` is a file-write tool.
+pub fn is_file_write_tool(name: &str) -> bool {
+    FILE_WRITE_TOOLS.contains(&name)
 }
 
 /// Prefix added to model output when inspection tools were used, to ground claims.
@@ -31,20 +47,69 @@ pub fn build_grounding_prefix() -> String {
 
 /// Verbs that strongly indicate the user wants the agent to change a file.
 const EDIT_VERBS: &[&str] = &[
-    "change", "edit", "update", "modify", "replace", "fix", "create", "rename", "delete", "remove",
-    "add", "set", "patch", "rewrite", "refactor", "remove", "insert", "append",
+    "change", "edit", "update", "modify", "replace", "fix", "create", "write", "rename", "delete",
+    "remove", "add", "set", "patch", "rewrite", "refactor", "insert", "append", "move",
 ];
 
 /// Phrases that imply the model is claiming it has already applied an edit.
 const SUCCESS_CLAIMS: &[&str] = &[
-    "i have updated", "i've updated", "i have changed", "i've changed",
-    "i have edited", "i've edited", "i have modified", "i've modified",
-    "i have replaced", "i've replaced", "i have fixed", "i've fixed",
-    "i have created", "i've created", "i applied",
-    "file has been updated", "file has been changed", "file has been edited",
-    "file has been modified", "the file is now", "here is the updated",
-    "here's the updated", "i rewrote", "i have rewritten", "i wrote it",
-    "i have written", "done.", "done!",
+    "i have updated",
+    "i've updated",
+    "i have changed",
+    "i've changed",
+    "i have edited",
+    "i've edited",
+    "i have modified",
+    "i've modified",
+    "i have replaced",
+    "i've replaced",
+    "i have fixed",
+    "i've fixed",
+    "i have created",
+    "i've created",
+    "i applied",
+    "file has been updated",
+    "file has been changed",
+    "file has been edited",
+    "file has been modified",
+    "the file is now",
+    "here is the updated",
+    "here's the updated",
+    "i rewrote",
+    "i have rewritten",
+    "i wrote it",
+    "i have written",
+    "done.",
+    "done!",
+];
+
+const PROSE_CONFIRMATION_PATTERNS: &[&str] = &[
+    "please confirm",
+    "would you like me to proceed",
+    "if you'd like",
+    "if you would like",
+    "i can create",
+    "i'll create",
+    "i will create",
+    "i can edit",
+    "i'll edit",
+    "i will edit",
+    "i can write",
+    "i'll write",
+    "i will write",
+    "shall i",
+];
+
+const CLARIFICATION_PATTERNS: &[&str] = &[
+    "which file",
+    "what file",
+    "file name",
+    "filename",
+    "please specify",
+    "need more",
+    "need additional",
+    "clarify",
+    "ambiguous",
 ];
 
 pub fn contains_codebase_intent_phrase(text: &str) -> bool {
@@ -104,6 +169,32 @@ fn claims_success(text: &str) -> bool {
     SUCCESS_CLAIMS.iter().any(|p| lower.contains(p))
 }
 
+pub fn is_prose_confirmation(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    PROSE_CONFIRMATION_PATTERNS
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+}
+
+pub fn is_clarification_request(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    CLARIFICATION_PATTERNS
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+}
+
+pub fn mutation_guard_message() -> String {
+    "This request requires a file mutation. I need to use the write_file/apply_patch tool so Poly UI can show an approval prompt.".to_string()
+}
+
+pub fn mutation_missing_message() -> String {
+    "File edit was requested, but no file changes were produced. The agent did not call write_file/apply_patch, so no file was created or edited.".to_string()
+}
+
+pub fn mutation_retry_instruction() -> String {
+    "Do not ask for confirmation in prose. Call write_file/apply_patch so the runtime approval system can handle confirmation.".to_string()
+}
+
 /// Sanitise final text against the edit-intent guard.
 ///
 /// If user asked for edit and no mutating tool succeeded, replace with warning.
@@ -128,6 +219,10 @@ Approval may still be pending, or the tool was rejected. I have not modified the
 
     if claims_success(&text) {
         return "I inspected the file, but no edit was applied.".to_string();
+    }
+
+    if is_prose_confirmation(&text) {
+        return mutation_guard_message();
     }
 
     text
@@ -195,6 +290,17 @@ mod tests {
     }
 
     #[test]
+    fn prose_confirmation_is_guarded() {
+        let s = sanitise_final_text(
+            "I'll create awesome1.txt. Please confirm.".to_string(),
+            EditIntent::detect("write a file called awesome1.txt"),
+            false,
+            false,
+        );
+        assert!(s.contains("requires a file mutation"));
+    }
+
+    #[test]
     fn sanitise_warns_when_mutating_requested_but_failed() {
         let s = sanitise_final_text(
             "I've updated the title.".to_string(),
@@ -210,12 +316,34 @@ mod tests {
     fn codebase_intent_detection() {
         assert!(contains_codebase_intent_phrase("What is this codebase?"));
         assert!(contains_codebase_intent_phrase("What does this app do?"));
-        assert!(contains_codebase_intent_phrase("What does this program do?"));
+        assert!(contains_codebase_intent_phrase(
+            "What does this program do?"
+        ));
         assert!(contains_codebase_intent_phrase("How does this work?"));
         assert!(contains_codebase_intent_phrase("Explain this directory"));
         assert!(contains_codebase_intent_phrase("Explain this repo"));
         assert!(contains_codebase_intent_phrase("Summarise this project"));
         assert!(!contains_codebase_intent_phrase("What is the weather?"));
         assert!(!contains_codebase_intent_phrase("Tell me a joke"));
+    }
+
+    #[test]
+    fn is_command_tool_recognises_run_command() {
+        assert!(is_command_tool("run_command"));
+        assert!(!is_command_tool("apply_patch"));
+        assert!(!is_command_tool("write_file"));
+        assert!(!is_command_tool("list_files"));
+        assert!(!is_command_tool("read_file"));
+        assert!(!is_command_tool(""));
+    }
+
+    #[test]
+    fn is_file_write_tool_recognises_writes() {
+        assert!(is_file_write_tool("apply_patch"));
+        assert!(is_file_write_tool("write_file"));
+        assert!(!is_file_write_tool("run_command"));
+        assert!(!is_file_write_tool("list_files"));
+        assert!(!is_file_write_tool("read_file"));
+        assert!(!is_file_write_tool(""));
     }
 }

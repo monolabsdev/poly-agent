@@ -68,7 +68,8 @@ fn parse_multiple_tool_calls() {
 
 #[test]
 fn parse_empty_choices_fails() {
-    let body: OpenAIResponse = serde_json::from_value(serde_json::json!({ "choices": [] })).unwrap();
+    let body: OpenAIResponse =
+        serde_json::from_value(serde_json::json!({ "choices": [] })).unwrap();
     assert!(OpenAICompatibleAdapter::parse_response(body).is_err());
 }
 

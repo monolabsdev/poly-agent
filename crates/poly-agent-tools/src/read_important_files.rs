@@ -23,12 +23,7 @@ fn default_max_total_bytes() -> usize {
 }
 
 /// Default important file patterns to look for.
-const IMPORTANT_FILE_PATTERNS: &[&str] = &[
-    "README.md",
-    "AGENTS.md",
-    "CLAUDE.md",
-    "Cargo.toml",
-];
+const IMPORTANT_FILE_PATTERNS: &[&str] = &["README.md", "AGENTS.md", "CLAUDE.md", "Cargo.toml"];
 
 #[async_trait::async_trait]
 impl AgentTool for ReadImportantFilesTool {
@@ -113,10 +108,7 @@ impl AgentTool for ReadImportantFilesTool {
             };
 
             if !metadata.is_file() {
-                file_results.insert(
-                    path_str.clone(),
-                    serde_json::json!({"error": "not a file"}),
-                );
+                file_results.insert(path_str.clone(), serde_json::json!({"error": "not a file"}));
                 continue;
             }
 

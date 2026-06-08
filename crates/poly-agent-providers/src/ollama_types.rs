@@ -44,13 +44,14 @@ pub(crate) fn build_tools(tools: &[ToolSpec]) -> Vec<ToolInfo> {
         .iter()
         .map(|tool| ToolInfo {
             tool_type: ToolType::Function,
-                function: ToolFunctionInfo {
-                    name: tool.name.clone(),
-                    description: tool.description.clone(),
-                    parameters: serde_json::from_value(tool.parameters.clone())
-                        .unwrap_or_else(|_| serde_json::from_value(serde_json::json!({})).expect("empty schema")),
-                },
-            })
+            function: ToolFunctionInfo {
+                name: tool.name.clone(),
+                description: tool.description.clone(),
+                parameters: serde_json::from_value(tool.parameters.clone()).unwrap_or_else(|_| {
+                    serde_json::from_value(serde_json::json!({})).expect("empty schema")
+                }),
+            },
+        })
         .collect()
 }
 

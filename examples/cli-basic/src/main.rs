@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
+use poly_agent_core::PermissionPreset;
 use poly_agent_providers::{ModelAdapter, OllamaAdapter, OpenAICompatibleAdapter};
-use poly_agent_runtime::{AgentRuntime, ToolRegistry};
+use poly_agent_runtime::{AgentRuntime, AgentRuntimeConfig, ToolRegistry};
 
 use crate::chat::run_chat;
 use crate::config::SessionConfig;
@@ -30,6 +31,26 @@ struct Cli {
     prompt: Option<String>,
     #[arg(long)]
     debug: bool,
+    #[arg(long, value_enum, default_value_t = PresetArg::Default)]
+    preset: PresetArg,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+#[clap(rename_all = "kebab-case")]
+enum PresetArg {
+    Default,
+    AutoReview,
+    FullAccess,
+}
+
+impl From<PresetArg> for PermissionPreset {
+    fn from(value: PresetArg) -> Self {
+        match value {
+            PresetArg::Default => PermissionPreset::Default,
+            PresetArg::AutoReview => PermissionPreset::AutoReview,
+            PresetArg::FullAccess => PermissionPreset::FullAccess,
+        }
+    }
 }
 
 #[tokio::main]
@@ -65,7 +86,11 @@ async fn main() -> anyhow::Result<()> {
             let base_url = cli
                 .base_url
                 .unwrap_or_else(|| "http://localhost:1234/v1".to_string());
-            Arc::new(OpenAICompatibleAdapter::new(base_url, &cli.model, cli.api_key))
+            Arc::new(OpenAICompatibleAdapter::new(
+                base_url,
+                &cli.model,
+                cli.api_key,
+            ))
         }
         other => anyhow::bail!("Unknown provider: '{other}'. Use 'ollama' or 'openai-compatible'."),
     };
@@ -73,12 +98,22 @@ async fn main() -> anyhow::Result<()> {
     let mut registry = ToolRegistry::new();
     poly_agent_tools::register_all_tools(&mut registry);
     eprintln!("Registered {} tools", registry.len());
+    eprintln!("Permission preset: {:?}", cli.preset);
 
-    let runtime = Arc::new(AgentRuntime::new(registry, adapter));
+    let preset: PermissionPreset = cli.preset.into();
+    let runtime = Arc::new(AgentRuntime::with_config(
+        registry,
+        adapter,
+        AgentRuntimeConfig {
+            permission_preset: preset,
+            reviewer: None,
+        },
+    ));
     let config = SessionConfig {
         provider: cli.provider,
         model: cli.model,
         workspace: std::fs::canonicalize(&cli.workspace)?,
+        preset,
     };
 
     if let Some(prompt) = cli.prompt {

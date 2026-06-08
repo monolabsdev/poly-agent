@@ -472,6 +472,7 @@ dependencies = [
  "poly-agent-tools",
  "rustyline",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2648,8 +2649,11 @@ dependencies = [
  "async-trait",
  "poly-agent-core",
  "poly-agent-providers",
+ "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -2685,6 +2689,7 @@ dependencies = [
  "serde_json",
  "similar",
  "tokio",
+ "tokio-util",
  "tracing",
  "walkdir",
 ]

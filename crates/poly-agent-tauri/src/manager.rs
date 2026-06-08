@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use poly_agent_core::{AgentInput, RunId};
 use poly_agent_core::AgentEvent;
+use poly_agent_core::{AgentInput, RunId};
 use poly_agent_runtime::AgentRuntime;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio::task::JoinHandle;
@@ -14,8 +14,7 @@ use crate::events::{
 use crate::types::{AgentRunError, AgentRunInput, MutableRunState, RunStateSnapshot, RunStatus};
 use crate::workspace::{default_runtime, prepare_run, PreparedRun};
 
-type RuntimeFactory =
-    Arc<dyn Fn(PreparedRun) -> Result<AgentRuntime, AgentRunError> + Send + Sync>;
+type RuntimeFactory = Arc<dyn Fn(PreparedRun) -> Result<AgentRuntime, AgentRunError> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct AgentRunManager {
@@ -105,9 +104,18 @@ impl AgentRunManager {
         let slot = self.slot(run_id).await?;
         let runtime_run_id = {
             let mut state = slot.state.lock().await;
-            if state.pending_approval.as_ref().map(|a| a.approval_id.as_str())
+            if state
+                .pending_approval
+                .as_ref()
+                .map(|a| a.approval_id.as_str())
                 != Some(approval_id)
             {
+                if matches!(
+                    state.status,
+                    RunStatus::Running | RunStatus::Finished | RunStatus::Failed | RunStatus::Cancelled
+                ) {
+                    return Ok(());
+                }
                 return Err(AgentRunError::ApprovalNotFound(run_id));
             }
             state.status = RunStatus::Running;
@@ -131,9 +139,18 @@ impl AgentRunManager {
         let slot = self.slot(run_id).await?;
         let runtime_run_id = {
             let mut state = slot.state.lock().await;
-            if state.pending_approval.as_ref().map(|a| a.approval_id.as_str())
+            if state
+                .pending_approval
+                .as_ref()
+                .map(|a| a.approval_id.as_str())
                 != Some(approval_id)
             {
+                if matches!(
+                    state.status,
+                    RunStatus::Running | RunStatus::Finished | RunStatus::Failed | RunStatus::Cancelled
+                ) {
+                    return Ok(());
+                }
                 return Err(AgentRunError::ApprovalNotFound(run_id));
             }
             state.status = RunStatus::Running;
@@ -149,10 +166,7 @@ impl AgentRunManager {
             .map_err(|err| AgentRunError::Other(err.to_string()))
     }
 
-    pub async fn get_run_state(
-        &self,
-        run_id: RunId,
-    ) -> Result<RunStateSnapshot, AgentRunError> {
+    pub async fn get_run_state(&self, run_id: RunId) -> Result<RunStateSnapshot, AgentRunError> {
         let slot = self.slot(run_id).await?;
         let snapshot = slot.state.lock().await.snapshot();
         Ok(snapshot)
@@ -173,13 +187,7 @@ impl AgentRunManager {
         snapshots
     }
 
-    async fn spawn_run(
-        &self,
-        run_id: RunId,
-        slot: Arc<RunSlot>,
-        input: AgentInput,
-        debug: bool,
-    ) {
+    async fn spawn_run(&self, run_id: RunId, slot: Arc<RunSlot>, input: AgentInput, debug: bool) {
         let manager = self.clone();
         let runtime = slot.runtime.clone();
         let cancellation = slot.cancellation.clone();
@@ -203,10 +211,11 @@ impl AgentRunManager {
         });
 
         let run_slot = slot.clone();
+        let run_cancellation = cancellation.clone();
         let run_task = tokio::spawn(async move {
             let mut cancelled = false;
             tokio::select! {
-                result = runtime.run(input, tx) => {
+                result = runtime.run(input, tx, run_cancellation) => {
                     if let Err(err) = result {
                         let mut state = run_slot.state.lock().await;
                         if state.status != RunStatus::Cancelled {

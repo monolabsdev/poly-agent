@@ -114,6 +114,58 @@ pub enum ToolRisk {
     Dangerous,
 }
 
+/// Policy preset that decides how the runtime handles tool approvals.
+///
+/// Presets are policy defaults, not hardcoded states. The existing
+/// `approve_tool` / `reject_tool` API continues to work as a per-call override.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PermissionPreset {
+    /// Auto-approve file writes (apply_patch, write_file). Prompt for run_command.
+    Default,
+    /// Use an auto-reviewer to classify tool calls.
+    /// Low -> approve, Medium -> ask user, High -> deny.
+    AutoReview,
+    /// Auto-approve every tool call. Runtime safety guards still apply.
+    FullAccess,
+}
+
+impl Default for PermissionPreset {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
+/// Why a tool call was auto-approved. Emitted to the UI for transparency.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AutoApproveReason {
+    /// Default preset auto-approves file writes.
+    PresetDefault,
+    /// FullAccess preset auto-approves every tool.
+    FullAccess,
+    /// AutoReviewer classified this call as low risk.
+    AutoReviewLow,
+}
+
+/// Risk classification returned by the auto-reviewer.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum AutoReviewRisk {
+    Low,
+    Medium,
+    High,
+}
+
+/// Final decision the auto-reviewer recommends for a tool call.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewDecision {
+    Approve,
+    Ask,
+    Deny,
+}
+
 /// Input to start an agent run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentInput {
@@ -121,6 +173,33 @@ pub struct AgentInput {
     pub workspace: PathBuf,
     pub model: ModelConfig,
     pub limits: RuntimeLimits,
+    #[serde(default)]
+    pub permission_preset: PermissionPreset,
+    #[serde(default)]
+    pub resolved_context: Option<AgentResolvedContext>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentResolvedContext {
+    #[serde(default)]
+    pub active_workspace: Option<String>,
+    #[serde(default)]
+    pub active_file: Option<String>,
+    #[serde(default)]
+    pub recently_viewed_files: Vec<String>,
+    #[serde(default)]
+    pub recently_edited_files: Vec<String>,
+    #[serde(default)]
+    pub recent_constraints: Vec<String>,
+    #[serde(default)]
+    pub last_tool_call: Option<AgentLastToolCall>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentLastToolCall {
+    pub tool_name: String,
+    #[serde(default)]
+    pub target_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -153,6 +232,8 @@ pub struct RuntimeLimits {
     pub max_tool_output_bytes: usize,
     pub max_search_results: usize,
     pub max_context_messages: usize,
+    /// Timeout in seconds for `run_command` tool execution. Default: 60.
+    pub command_timeout_secs: u64,
 }
 
 impl Default for RuntimeLimits {
@@ -163,6 +244,7 @@ impl Default for RuntimeLimits {
             max_tool_output_bytes: 64 * 1024,
             max_search_results: 50,
             max_context_messages: 32,
+            command_timeout_secs: 60,
         }
     }
 }

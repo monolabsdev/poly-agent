@@ -119,12 +119,18 @@ mod tests {
 
     #[test]
     fn normalize_separators_handles_backslash() {
-        assert_eq!(normalize_separators(r"crates\foo\src\lib.rs"), "crates/foo/src/lib.rs");
+        assert_eq!(
+            normalize_separators(r"crates\foo\src\lib.rs"),
+            "crates/foo/src/lib.rs"
+        );
     }
 
     #[test]
     fn normalize_separators_preserves_forward_slash() {
-        assert_eq!(normalize_separators("crates/foo/src/lib.rs"), "crates/foo/src/lib.rs");
+        assert_eq!(
+            normalize_separators("crates/foo/src/lib.rs"),
+            "crates/foo/src/lib.rs"
+        );
     }
 
     #[test]

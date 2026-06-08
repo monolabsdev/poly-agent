@@ -1,11 +1,14 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use poly_agent_core::PermissionPreset;
+
 #[derive(Debug)]
 pub struct SessionConfig {
     pub provider: String,
     pub model: String,
     pub workspace: PathBuf,
+    pub preset: PermissionPreset,
 }
 
 pub struct RunStats {

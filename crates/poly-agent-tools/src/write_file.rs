@@ -10,6 +10,18 @@ pub struct WriteFileTool;
 struct WriteFileArgs {
     path: String,
     content: String,
+    #[serde(default)]
+    mode: WriteFileMode,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum WriteFileMode {
+    Create,
+    #[default]
+    Replace,
 }
 
 #[async_trait::async_trait]
@@ -19,7 +31,7 @@ impl AgentTool for WriteFileTool {
     }
 
     fn description(&self) -> &'static str {
-        "Write content to a file in the workspace. Requires user approval."
+        "Use this to create or replace a file in the selected workspace. This is the correct tool when the user asks to create/write a file. Requires approval before execution."
     }
 
     fn risk(&self) -> ToolRisk {
@@ -37,6 +49,15 @@ impl AgentTool for WriteFileTool {
                 "content": {
                     "type": "string",
                     "description": "Content to write."
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["create", "replace"],
+                    "description": "Use create for a new file and replace to overwrite an existing file. Defaults to replace."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional short reason for the file write."
                 }
             },
             "required": ["path", "content"]
@@ -45,6 +66,7 @@ impl AgentTool for WriteFileTool {
 
     async fn run(&self, args: serde_json::Value, ctx: ToolContext) -> anyhow::Result<ToolResult> {
         let args: WriteFileArgs = serde_json::from_value(args)?;
+        let _reason = args.reason.as_deref();
         if is_ignored_dir(args.path.split(['/', '\\']).next().unwrap_or("")) {
             return Ok(ToolResult {
                 tool_call_id: String::new(),
@@ -55,6 +77,14 @@ impl AgentTool for WriteFileTool {
         }
 
         let target = resolve_and_validate(&ctx.workspace, &args.path)?;
+        if matches!(args.mode, WriteFileMode::Create) && target.exists() {
+            return Ok(ToolResult {
+                tool_call_id: String::new(),
+                output: format!("File already exists: {}", args.path),
+                is_error: true,
+                cached: false,
+            });
+        }
         if let Some(parent) = target.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }

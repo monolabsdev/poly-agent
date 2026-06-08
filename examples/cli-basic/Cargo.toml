@@ -9,6 +9,7 @@ poly-agent-providers = { path = "../../crates/poly-agent-providers" }
 poly-agent-runtime = { path = "../../crates/poly-agent-runtime" }
 poly-agent-tools = { path = "../../crates/poly-agent-tools" }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

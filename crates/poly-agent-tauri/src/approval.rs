@@ -19,10 +19,10 @@ impl ApprovalPayload {
         let reason = string_arg(call, "reason");
         let path = string_arg(call, "path");
         let command_preview = string_arg(call, "command");
-        let diff_preview = if call.name == "apply_patch" {
-            build_apply_patch_preview(call)
-        } else {
-            None
+        let diff_preview = match call.name.as_str() {
+            "apply_patch" => build_apply_patch_preview(call),
+            "write_file" => build_write_file_preview(call),
+            _ => None,
         };
 
         Self {
@@ -49,4 +49,31 @@ fn build_apply_patch_preview(call: &ToolCall) -> Option<String> {
     let old = string_arg(call, "expected_old_text")?;
     let new = string_arg(call, "replacement_text")?;
     Some(format!("--- expected\n+++ replacement\n-{}\n+{}", old, new))
+}
+
+fn build_write_file_preview(call: &ToolCall) -> Option<String> {
+    let path = string_arg(call, "path")?;
+    let content = string_arg(call, "content")?;
+    let lines = content_lines(&content);
+    let mut diff = format!("--- /dev/null\n+++ {}\n@@ -0,0 +1,{} @@", path, lines.len());
+    for line in lines {
+        diff.push('\n');
+        diff.push('+');
+        diff.push_str(&line);
+    }
+    Some(diff)
+}
+
+fn content_lines(content: &str) -> Vec<String> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = content
+        .split('\n')
+        .map(|line| line.trim_end_matches('\r').to_string())
+        .collect::<Vec<_>>();
+    if lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    lines
 }

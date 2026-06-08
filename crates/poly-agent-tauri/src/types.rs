@@ -2,7 +2,9 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use poly_agent_core::{ModelConfig, RunId, RuntimeLimits};
+use poly_agent_core::{
+    AgentResolvedContext, ModelConfig, PermissionPreset, RunId, RuntimeLimits,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::approval::ApprovalPayload;
@@ -27,9 +29,28 @@ pub struct AgentRunInput {
     #[serde(default)]
     pub workspace_path: Option<PathBuf>,
     #[serde(default)]
+    pub workspace_selection: Option<AgentWorkspaceSelection>,
+    #[serde(default)]
     pub limits: RuntimeLimits,
     #[serde(default)]
+    pub permission_preset: PermissionPreset,
+    #[serde(default)]
+    pub resolved_context: Option<AgentResolvedContext>,
+    #[serde(default)]
     pub debug: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum AgentWorkspaceSelection {
+    Project {
+        project_id: String,
+        #[serde(default)]
+        path: Option<PathBuf>,
+    },
+    Sandbox {
+        chat_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

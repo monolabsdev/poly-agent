@@ -11,6 +11,7 @@ serde_json = { workspace = true }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 walkdir = { workspace = true }
 tracing = { workspace = true }
 similar = "3.1.1"

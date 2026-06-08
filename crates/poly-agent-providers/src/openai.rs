@@ -1,9 +1,10 @@
 use crate::control::{contains_control_tokens, strip_control_tokens};
 use crate::error::ProviderError;
 use crate::retry;
-use crate::traits::{ChatRequest, ModelAdapter, ModelResponse, ToolSpec};
+use crate::traits::{ChatRequest, ModelAdapter, ModelResponse, ModelStream, ToolSpec};
 use poly_agent_core::{ChatMessage, ChatRole, ToolCall};
 use serde::{Deserialize, Serialize};
+use tokio_stream::StreamExt;
 
 pub struct OpenAICompatibleAdapter {
     base_url: String,
@@ -127,6 +128,38 @@ impl OpenAICompatibleAdapter {
             Ok(ModelResponse::Text(text))
         }
     }
+
+    fn parse_stream_chunk(line: &str) -> Result<Option<ModelResponse>, ProviderError> {
+        let Some(data) = line.strip_prefix("data:") else {
+            return Ok(None);
+        };
+        let data = data.trim();
+        if data.is_empty() || data == "[DONE]" {
+            return Ok(None);
+        }
+
+        let chunk: OpenAIStreamResponse = serde_json::from_str(data).map_err(|e| {
+            ProviderError::Parse(format!("Failed to deserialize stream chunk: {e}"))
+        })?;
+        let Some(choice) = chunk.choices.into_iter().next() else {
+            return Ok(None);
+        };
+        if let Some(delta) = choice.delta.content {
+            if delta.is_empty() {
+                return Ok(None);
+            }
+            if contains_control_tokens(&delta) {
+                let stripped = strip_control_tokens(&delta);
+                if stripped.trim().is_empty() {
+                    return Err(ProviderError::MalformedModelOutput);
+                }
+                tracing::warn!("Provider returned control tokens in stream, stripping them");
+                return Ok(Some(ModelResponse::Text(stripped)));
+            }
+            return Ok(Some(ModelResponse::Text(delta)));
+        }
+        Ok(None)
+    }
 }
 
 #[async_trait::async_trait]
@@ -156,6 +189,61 @@ impl ModelAdapter for OpenAICompatibleAdapter {
             .map_err(|e| ProviderError::Parse(format!("Failed to deserialize response: {e}")))?;
 
         Self::parse_response(response_body)
+    }
+
+    async fn chat_stream(&self, request: ChatRequest) -> Result<ModelStream, ProviderError> {
+        if !request.tools.is_empty() {
+            tracing::debug!(
+                "OpenAI-compatible tool-call stream fallback: using non-streaming response path"
+            );
+            let response = self.chat(request).await?;
+            return Ok(Box::pin(async_stream::stream! {
+                yield Ok(response);
+            }));
+        }
+
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+
+        let body = OpenAIRequest {
+            model: self.model.clone(),
+            messages: Self::build_messages(&request.messages),
+            tools: None,
+            stream: true,
+        };
+
+        let response = retry::send_with_retry(|| async {
+            let mut req = self.client.post(&url).json(&body);
+            if let Some(key) = &self.api_key {
+                req = req.bearer_auth(key);
+            }
+            req.send().await.map_err(ProviderError::Http)
+        })
+        .await?;
+
+        let stream = response.bytes_stream();
+        Ok(Box::pin(async_stream::try_stream! {
+            tokio::pin!(stream);
+            let mut buffer = String::new();
+            while let Some(item) = stream.next().await {
+                let bytes = item.map_err(ProviderError::Http)?;
+                let text = String::from_utf8_lossy(&bytes);
+                buffer.push_str(&text);
+
+                while let Some(index) = buffer.find('\n') {
+                    let line = buffer[..index].trim_end_matches('\r').to_string();
+                    buffer.drain(..=index);
+                    if let Some(response) = Self::parse_stream_chunk(line.trim())? {
+                        yield response;
+                    }
+                }
+            }
+
+            if !buffer.trim().is_empty() {
+                if let Some(response) = Self::parse_stream_chunk(buffer.trim())? {
+                    yield response;
+                }
+            }
+        }))
     }
 }
 
@@ -215,6 +303,21 @@ struct OpenAIResponse {
 #[derive(Deserialize, Debug)]
 struct OpenAIChoice {
     message: OpenAIMessage,
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenAIStreamResponse {
+    choices: Vec<OpenAIStreamChoice>,
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenAIStreamChoice {
+    delta: OpenAIStreamDelta,
+}
+
+#[derive(Deserialize, Debug)]
+struct OpenAIStreamDelta {
+    content: Option<String>,
 }
 
 #[cfg(test)]

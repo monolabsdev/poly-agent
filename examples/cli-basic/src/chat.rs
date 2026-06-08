@@ -4,8 +4,8 @@ use poly_agent_runtime::AgentRuntime;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
-use crate::events::{print_run_summary, run_prompt};
 use crate::config::SessionConfig;
+use crate::events::{print_run_summary, run_prompt};
 
 pub async fn run_chat(runtime: Arc<AgentRuntime>, config: SessionConfig) -> anyhow::Result<()> {
     let mut editor = DefaultEditor::new()?;

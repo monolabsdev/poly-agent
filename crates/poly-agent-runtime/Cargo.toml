@@ -6,9 +6,12 @@ edition = "2021"
 [dependencies]
 poly-agent-core = { path = "../poly-agent-core" }
 poly-agent-providers = { path = "../poly-agent-providers" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
+tokio-stream = { workspace = true }

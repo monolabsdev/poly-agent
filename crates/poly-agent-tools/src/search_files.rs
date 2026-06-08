@@ -141,6 +141,7 @@ mod tests {
                 max_search_results: 5,
                 ..RuntimeLimits::default()
             },
+            cancellation: tokio_util::sync::CancellationToken::new(),
         };
 
         let result = tool

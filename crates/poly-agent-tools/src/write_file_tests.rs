@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use poly_agent_core::ToolRisk;
 use poly_agent_runtime::{AgentTool, ToolContext};
 
 use super::WriteFileTool;
@@ -16,6 +17,7 @@ fn ctx(workspace: std::path::PathBuf) -> ToolContext {
     ToolContext {
         workspace,
         limits: Default::default(),
+        cancellation: tokio_util::sync::CancellationToken::new(),
     }
 }
 
@@ -38,7 +40,9 @@ async fn writes_new_file_and_parent_dirs() {
     assert!(!result.is_error);
     assert_eq!(result.output, "Wrote nested/test.txt");
     assert_eq!(
-        tokio::fs::read_to_string(workspace.join("nested/test.txt")).await.unwrap(),
+        tokio::fs::read_to_string(workspace.join("nested/test.txt"))
+            .await
+            .unwrap(),
         "hello\n"
     );
     let _ = tokio::fs::remove_dir_all(workspace).await;
@@ -48,7 +52,9 @@ async fn writes_new_file_and_parent_dirs() {
 async fn overwrites_existing_file() {
     let workspace = temp_workspace();
     tokio::fs::create_dir_all(&workspace).await.unwrap();
-    tokio::fs::write(workspace.join("test.txt"), "old").await.unwrap();
+    tokio::fs::write(workspace.join("test.txt"), "old")
+        .await
+        .unwrap();
 
     let result = WriteFileTool
         .run(
@@ -62,8 +68,75 @@ async fn overwrites_existing_file() {
         .unwrap();
 
     assert!(!result.is_error);
-    assert_eq!(tokio::fs::read_to_string(workspace.join("test.txt")).await.unwrap(), "new");
+    assert_eq!(
+        tokio::fs::read_to_string(workspace.join("test.txt"))
+            .await
+            .unwrap(),
+        "new"
+    );
     let _ = tokio::fs::remove_dir_all(workspace).await;
+}
+
+#[tokio::test]
+async fn missing_reason_does_not_fail() {
+    let workspace = temp_workspace();
+    tokio::fs::create_dir_all(&workspace).await.unwrap();
+
+    let result = WriteFileTool
+        .run(
+            serde_json::json!({
+                "path": "test.txt",
+                "content": "hello",
+                "mode": "create"
+            }),
+            ctx(workspace.clone()),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.is_error);
+    assert_eq!(
+        tokio::fs::read_to_string(workspace.join("test.txt"))
+            .await
+            .unwrap(),
+        "hello"
+    );
+    let _ = tokio::fs::remove_dir_all(workspace).await;
+}
+
+#[tokio::test]
+async fn create_mode_does_not_overwrite_existing_file() {
+    let workspace = temp_workspace();
+    tokio::fs::create_dir_all(&workspace).await.unwrap();
+    tokio::fs::write(workspace.join("test.txt"), "old")
+        .await
+        .unwrap();
+
+    let result = WriteFileTool
+        .run(
+            serde_json::json!({
+                "path": "test.txt",
+                "content": "new",
+                "mode": "create"
+            }),
+            ctx(workspace.clone()),
+        )
+        .await
+        .unwrap();
+
+    assert!(result.is_error);
+    assert_eq!(
+        tokio::fs::read_to_string(workspace.join("test.txt"))
+            .await
+            .unwrap(),
+        "old"
+    );
+    let _ = tokio::fs::remove_dir_all(workspace).await;
+}
+
+#[test]
+fn write_file_requires_approval() {
+    assert_eq!(WriteFileTool.risk(), ToolRisk::RequiresApproval);
 }
 
 #[tokio::test]

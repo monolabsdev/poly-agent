@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use poly_agent_core::{RuntimeLimits, ToolResult, ToolRisk};
+use tokio_util::sync::CancellationToken;
 
 /// Context passed to each tool invocation.
 #[derive(Debug, Clone)]
@@ -11,6 +12,8 @@ pub struct ToolContext {
     pub workspace: PathBuf,
     /// Runtime limits for bounding output.
     pub limits: RuntimeLimits,
+    /// Cancellation token — tools should check this and abort early if cancelled.
+    pub cancellation: CancellationToken,
 }
 
 /// Trait that all agent tools must implement.

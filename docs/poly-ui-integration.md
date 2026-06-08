@@ -1,107 +1,164 @@
-# Poly UI Integration
+# Poly UI Integration — Agent Mode
 
-`poly-agent-tauri` is the Rust bridge for embedding poly-agent in Poly UI. It keeps Poly UI talking to stable run/event APIs while providers, tools, and runtime internals stay inside Rust crates.
+This document explains how to wire the enhanced `poly-agent` runtime into the existing Poly UI frontend for Agent Mode.
 
-## Workspace Attachment
+## What's Already Wired
 
-Poly UI should pass `workspace_path` when a chat is attached to a folder. The manager validates that path, canonicalizes it, stores it in `RunState`, and enables local file/project/edit tools.
+Poly UI (`src/features/agent/`) already has complete agent infrastructure:
 
-When no workspace is attached, the run enters chat-only mode: `workspace_root: null`, `local_tools_enabled: false`, and local tools are not registered for the run.
+| Feature | File | Status |
+|---|---|---|
+| Tauri command wrappers | `agentClient.ts` | `runAgent`, `cancelAgent`, `approveAgentToolCall`, `rejectAgentToolCall` |
+| Event subscription | `agentClient.ts` | `listenToAgentEvents()` → `listen("poly-agent:event", ...)` |
+| Agent activity timeline | `AgentActivityDisclosure.tsx` | Renders `AgentActivityItem[]` |
+| Approval bar | `AgentApprovalBar.tsx` | Approve/reject with file review |
+| Workspace selector | `AgentWorkspaceSelector.tsx` | Project/sandbox selection |
+| Agent mode toggle | `agentStore.ts` | `enabled` state per chat |
+| Run lifecycle | `useAgentRun.ts` | Start, stream, cancel, finish |
 
-## Tauri Commands
+## New Events to Handle
 
-Feature-gated commands live behind the `tauri` feature:
+After the poly-agent changes, two new event types arrive via `poly-agent:event`:
 
-```ts
-agent_run(input): Promise<RunId>
-agent_cancel(runId): Promise<void>
-agent_approve_tool_call(runId, approvalId): Promise<void>
-agent_reject_tool_call(runId, approvalId): Promise<void>
-agent_get_run_state(runId): Promise<RunStateSnapshot>
-```
+### 1. `tool_call_delta` — Streaming command output
 
-All commands are designed to use Tauri managed state containing `AgentRunManager`. Build the manager with `tauri_event_sink(app_handle)` so each run event is emitted to the frontend.
-
-## Event Stream
-
-Rust emits one Tauri event name:
-
-```text
-poly-agent:event
-```
-
-Payload shape:
+Emitted by `run_command` as stdout/stderr streams in. Payload:
 
 ```json
 {
-  "run_id": "uuid",
-  "event_type": "approval_required",
-  "timestamp": { "secs_since_epoch": 0, "nanos_since_epoch": 0 },
-  "data": {}
-}
-```
-
-Common `event_type` values:
-
-```text
-started
-thinking
-model_call_started
-text_delta
-tool_call_requested
-tool_call_started
-tool_call_finished
-approval_required
-finished
-failed
-cancelled
-```
-
-Approval event payload:
-
-```json
-{
-  "kind": "approval_required",
-  "value": {
-    "approval_id": "call_1",
-    "tool_name": "apply_patch",
-    "risk": "RequiresApproval",
-    "reason": "Rename project title",
-    "path": "README.md",
-    "command_preview": null,
-    "diff_preview": "--- expected\n+++ replacement\n-old\n+new"
+  "run_id": "...",
+  "event_type": "tool_call_delta",
+  "data": {
+    "kind": "tool_call_delta",
+    "value": {
+      "tool_call_id": "call_1",
+      "delta": "partial output text"
+    }
   }
 }
 ```
 
-`raw_arguments` is included only when debug mode is enabled.
+**Frontend handling:** In `appendAgentEvent()` (`activity.ts`), when a `tool_call_started` event has `tool_name: "run_command"`, subsequent `tool_call_delta` events append to a live output buffer for that tool call. Render as a live-updating `<pre>` block.
 
-## Frontend Wrapper Draft
+### 2. `suggest_command` output — Structured command suggestion
 
-```ts
-export async function runAgent(input: AgentRunInput) {
-  return invoke<string>("agent_run", { input })
-}
+When `tool_call_finished` arrives with `tool_name: "suggest_command"`, the output is structured JSON:
 
-export async function cancelAgent(runId: string) {
-  return invoke("agent_cancel", { runId })
-}
-
-export async function approveToolCall(runId: string, approvalId: string) {
-  return invoke("agent_approve_tool_call", { runId, approvalId })
-}
-
-export async function rejectToolCall(runId: string, approvalId: string) {
-  return invoke("agent_reject_tool_call", { runId, approvalId })
-}
-
-export function listenToAgentEvents(handler: (event: AgentEvent) => void) {
-  return listen<AgentEvent>("poly-agent:event", (event) => handler(event.payload))
+```json
+{
+  "command": "bun install",
+  "explanation": "Install workspace dependencies",
+  "risk_level": "medium",
+  "expected_outcome": "node_modules populated, lockfile updated",
+  "type": "command_suggestion"
 }
 ```
 
-## UI Placement
+**Frontend handling:** Parse the JSON output and render as a suggestion card with:
+- Command text
+- Explanation
+- Risk level badge (low/medium/high)
+- Expected outcome
+- Actions: Copy, Run (triggers `run_command`), Approve
 
-Place Agent Mode toggle in chat input or header. Show Agent Activity as a disclosure under assistant messages, backed by stored run events. Render approval cards for diffs and commands using `approval_required` payloads.
+### 3. Updated `tool_call_finished` for `run_command`
 
-Cancellation is cooperative at manager level today: it marks the run cancelled, emits `cancelled`, aborts the run task, and leaves provider-level cancellation as future work.
+Output format for `run_command`:
+
+```
+Command: echo hello
+Working directory: /path/to/workspace
+Exit code: 0
+Status: success
+Duration: 42ms
+
+Stdout:
+hello
+```
+
+**Frontend handling:** Parse this structured output and render:
+- Command string
+- Exit code with color (green for 0, red for non-zero)
+- Duration
+- Collapsible stdout/stderr sections
+- Whether it was cancelled (check for "timed out" in output)
+
+## What Needs Frontend Changes
+
+### In `activity.ts` — `appendAgentEvent()`
+
+Add handling for the new `tool_call_delta` event kind:
+
+```typescript
+case "tool_call_delta":
+  // Find the current tool call in the activity timeline
+  // Append delta.value.delta to its output buffer
+  // Trigger re-render of the live output area
+  break;
+```
+
+### In `AgentActivityDisclosure.tsx`
+
+Add rendering for:
+- Live command output (for `run_command` tool calls with streaming deltas)
+- Command suggestion cards (for `suggest_command` tool calls)
+- Exit code badges, duration display
+- Collapsible stdout/stderr sections
+
+### In `useAgentRun.ts`
+
+The existing hook already handles:
+- Starting runs via `runAgent()`
+- Listening to events via `listenToAgentEvents()`
+- Building activity timeline via `appendAgentEvent()`
+- Handling finish/fail/cancel states
+
+No changes needed in the hook — the new event types flow through the existing pipeline.
+
+## Build & Test
+
+```bash
+# In poly-agent repo
+cargo test                    # All 83 tests pass
+cargo clippy                  # No new warnings
+
+# In poly-ui repo
+bun run tauri dev             # Start the app
+```
+
+## Manual Testing Checklist
+
+```
+1. Enable Agent Mode via the toggle
+2. Select a workspace (folder/project)
+3. Ask "list files in the current directory"
+   - Verify: TextDelta streams before tool call
+   - Verify: ToolCallRequested → ToolCallStarted → ToolCallFinished
+4. Ask "run `echo hello`"
+   - Verify: ApprovalRequired fires
+   - Approve: verify stdout shows "hello"
+   - Verify: Exit code 0, duration displayed
+5. Ask "suggest running `bun install`"
+   - Verify: ToolCallFinished with JSON output
+   - Verify: No process was spawned
+6. Ask "delete the entire project"
+   - Verify: ApprovalRequired with high-risk
+   - Reject: verify "Tool execution denied" message
+7. During a long command, click Cancel
+   - Verify: Run status becomes "cancelled"
+   - Verify: No zombie processes
+8. Ask a multi-step question
+   - Verify: Assistant text streams between tool calls
+   - Verify: Activity timeline shows all events
+9. Test with no workspace (chat-only mode)
+   - Verify: run_command/suggest_command unavailable
+   - Verify: read-only tools still work
+```
+
+## Limitations
+
+1. **No provider-level cancellation** — In-flight LLM HTTP requests complete even after cancel. Cancellation only takes effect between steps.
+2. **Command timeout is 60s default** — Configurable via `RuntimeLimits.command_timeout_secs` but not yet exposed in the frontend.
+3. **No command audit log** — Commands are not persisted beyond the event buffer (max 500 events per run).
+4. **Shell injection is limited, not eliminated** — Commands run via `sh -c` / `cmd /C`. The approval gate is the primary defense.
+5. **`delete_file`/`rename_file` still not implemented** — Referenced in `MUTATING_TOOLS` but not yet built.

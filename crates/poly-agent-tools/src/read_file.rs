@@ -98,6 +98,7 @@ mod tests {
                 max_file_read_bytes: 100,
                 ..RuntimeLimits::default()
             },
+            cancellation: tokio_util::sync::CancellationToken::new(),
         };
 
         let result = tool

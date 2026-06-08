@@ -27,6 +27,8 @@ pub async fn run_prompt(
             api_key: None,
         },
         limits: RuntimeLimits::default(),
+        permission_preset: config.preset,
+        resolved_context: None,
     };
 
     let (event_tx, mut event_rx) = mpsc::channel::<AgentEvent>(32);
@@ -64,7 +66,8 @@ pub async fn run_prompt(
     eprintln!("\nStarting agent run...\n");
 
     let start_time = Instant::now();
-    let output = runtime.run(input, event_tx).await?;
+    let cancellation = tokio_util::sync::CancellationToken::new();
+    let output = runtime.run(input, event_tx, cancellation).await?;
     let elapsed = start_time.elapsed();
     let stats = event_handle.await?;
 
@@ -104,7 +107,11 @@ fn print_event(event: &AgentEvent) {
             let tag = if result.cached { " [cached]" } else { "" };
             let single_line = result.output.replace('\n', " ");
             let preview: String = single_line.chars().take(60).collect();
-            let suffix = if single_line.chars().count() > 60 { "..." } else { "" };
+            let suffix = if single_line.chars().count() > 60 {
+                "..."
+            } else {
+                ""
+            };
             eprintln!("Result: {preview}{suffix}{tag}");
         }
         AgentEvent::ApprovalRequired { call, .. } => {
