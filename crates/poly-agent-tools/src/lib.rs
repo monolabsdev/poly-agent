@@ -4,6 +4,8 @@
 
 mod apply_patch;
 mod common;
+mod grep_files;
+mod glob_files;
 mod inspect_project;
 mod list_files;
 mod propose_edit;
@@ -15,6 +17,8 @@ mod suggest_command;
 mod write_file;
 
 pub use apply_patch::ApplyPatchTool;
+pub use grep_files::GrepFilesTool;
+pub use glob_files::GlobFilesTool;
 pub use inspect_project::InspectProjectTool;
 pub use list_files::ListFilesTool;
 pub use propose_edit::ProposeEditTool;
@@ -33,6 +37,8 @@ pub fn register_safe_tools(registry: &mut ToolRegistry) {
     registry.register(Arc::new(ListFilesTool));
     registry.register(Arc::new(ReadFileTool));
     registry.register(Arc::new(SearchFilesTool));
+    registry.register(Arc::new(GrepFilesTool));
+    registry.register(Arc::new(GlobFilesTool));
     registry.register(Arc::new(ProposeEditTool));
     registry.register(Arc::new(InspectProjectTool));
     registry.register(Arc::new(ReadImportantFilesTool));

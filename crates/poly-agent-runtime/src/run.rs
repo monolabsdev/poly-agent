@@ -39,19 +39,6 @@ Strategy for codebase summaries:
 3. After 2-3 calls total, summarize using gathered evidence.
 Do not inspect every module unless specifically asked. Gather evidence then answer.";
 
-const VALID_TOOL_NAMES: &[&str] = &[
-    "list_files",
-    "read_file",
-    "search_files",
-    "propose_edit",
-    "apply_patch",
-    "write_file",
-    "run_command",
-    "suggest_command",
-    "inspect_project",
-    "read_important_files",
-];
-
 const MODEL_CALL_TIMEOUT_SECS: u64 = 120;
 
 async fn emit_activity(
@@ -88,9 +75,9 @@ async fn emit_activity_with_details(
         .await;
 }
 
-fn build_system_prompt(max_steps: usize) -> String {
+fn build_system_prompt(max_steps: usize, agent_system_prompt: &str, tool_names: &str) -> String {
     format!(
-        "You are a helpful, careful coding agent.\n\
+        "{}\n\
 \n\
 Available tools: {}\n\
 Never invent tool names. Only use tools from this list.\n\
@@ -115,9 +102,18 @@ Follow-up context rules:\n\
 \n\
 Tool budget: You have up to {} model calls. Use tools efficiently. \
 Stop once you have enough information to produce the final answer.",
-        VALID_TOOL_NAMES.join(", "),
+        agent_system_prompt,
+        tool_names,
         max_steps,
     )
+}
+
+fn tool_names_from_specs(specs: &[poly_agent_providers::ToolSpec]) -> String {
+    specs
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect::<Vec<&str>>()
+        .join(", ")
 }
 
 struct RunContext {
@@ -126,6 +122,8 @@ struct RunContext {
     cancellation: CancellationToken,
     tool_ctx: ToolContext,
     tool_specs: Vec<poly_agent_providers::ToolSpec>,
+    agent_system_prompt: String,
+    tool_names: String,
     edit_intent: EditIntent,
     has_codebase_intent: bool,
     simple_chat: bool,
@@ -157,6 +155,13 @@ impl AgentRuntime {
         let has_codebase_intent = contains_codebase_intent_phrase(&input.prompt);
         let simple_chat = is_simple_chat_prompt(&input.prompt, edit_intent, has_codebase_intent);
 
+        let tool_specs = if simple_chat {
+            Vec::new()
+        } else {
+            self.tools.tool_specs_for_agent(&self.agent_config)
+        };
+        let tool_names = tool_names_from_specs(&tool_specs);
+
         let ctx = RunContext {
             run_id,
             event_tx,
@@ -166,7 +171,9 @@ impl AgentRuntime {
                 limits: input.limits.clone(),
                 cancellation,
             },
-            tool_specs: if simple_chat { Vec::new() } else { self.tools.tool_specs() },
+            tool_specs,
+            agent_system_prompt: self.agent_config.system_prompt.clone(),
+            tool_names,
             edit_intent,
             has_codebase_intent,
             simple_chat,
@@ -270,7 +277,7 @@ impl AgentRuntime {
         let mut messages = vec![
             ChatMessage {
                 role: ChatRole::System,
-                content: build_system_prompt(ctx.max_steps),
+                content: build_system_prompt(ctx.max_steps, &ctx.agent_system_prompt, &ctx.tool_names),
                 tool_calls: Vec::new(),
                 tool_call_id: None,
             },
@@ -694,7 +701,7 @@ impl AgentRuntime {
                     let name = state.unknown_tool_retried.clone().unwrap_or_default();
                     let msg = format!(
                         "Model repeatedly requested unknown tool '{name}'. Available: {}",
-                        VALID_TOOL_NAMES.join(", ")
+                        ctx.tool_names
                     );
                     let _ = ctx
                         .event_tx
@@ -800,8 +807,8 @@ impl AgentRuntime {
         .await;
 
         let tool = match self.tools.get(&call.name) {
-            Some(t) => t,
-            None => {
+            Some(t) if self.tools.is_available(&call.name, &self.agent_config) => t,
+            _ => {
                 // Emit unknown tool event.
                 let _ = ctx
                     .event_tx
@@ -817,7 +824,7 @@ impl AgentRuntime {
                     let msg = format!(
                         "Tool '{}' does not exist. Available tools are: {}. Stopping.",
                         call.name,
-                        VALID_TOOL_NAMES.join(", ")
+                        ctx.tool_names
                     );
                     state
                         .messages
@@ -842,7 +849,7 @@ impl AgentRuntime {
                 let corrective = format!(
                     "Tool '{}' does not exist. Available tools are: {}. Never invent tool names.",
                     call.name,
-                    VALID_TOOL_NAMES.join(", ")
+                    ctx.tool_names
                 );
                 state
                     .messages

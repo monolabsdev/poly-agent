@@ -154,6 +154,7 @@ fn manager_with_adapter(adapter: Arc<dyn ModelAdapter>) -> AgentRunManager {
                 AgentRuntimeConfig {
                     permission_preset: prepared.input.permission_preset,
                     reviewer: None,
+                    agent_config: None,
                 },
             ))
         }),

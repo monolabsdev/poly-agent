@@ -224,6 +224,23 @@ pub struct AgentOutput {
     pub finish_reason: FinishReason,
 }
 
+/// Configuration for a named agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    pub name: String,
+    pub description: String,
+    pub system_prompt: String,
+    /// Allowed tool names. Empty means all safe tools.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    /// Gates the run_command dangerous tool.
+    #[serde(default)]
+    pub allow_dangerous: bool,
+    /// Override the model for this agent.
+    #[serde(default)]
+    pub model_override: Option<String>,
+}
+
 /// Hard limits to prevent unbounded resource usage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLimits {

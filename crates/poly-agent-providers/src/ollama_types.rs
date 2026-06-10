@@ -3,10 +3,11 @@ use crate::{
     traits::{ModelResponse, ToolSpec},
 };
 use ollama_rs::generation::{
-    chat::{request::ChatMessageRequest, ChatMessage as OllamaChatMessage, ChatMessageResponse},
-    tools::{ToolCall as OllamaToolCall, ToolFunctionInfo, ToolInfo, ToolType},
+    chat::{ChatMessage as OllamaChatMessage, ChatMessageResponse},
+    tools::ToolCall as OllamaToolCall,
 };
 use poly_agent_core::{ChatMessage, ChatRole, ToolCall};
+use serde::Serialize;
 use uuid::Uuid;
 
 pub(crate) fn build_messages(messages: &[ChatMessage]) -> Vec<OllamaChatMessage> {
@@ -39,20 +40,58 @@ pub(crate) fn build_messages(messages: &[ChatMessage]) -> Vec<OllamaChatMessage>
         .collect()
 }
 
-pub(crate) fn build_tools(tools: &[ToolSpec]) -> Vec<ToolInfo> {
+/// Our own tool serialization that outputs `"type": "function"` (lowercase).
+/// `ollama_rs::ToolType::Function` serializes as `"Function"` (PascalCase)
+/// which Ollama does not recognise, silently dropping all tools.
+#[derive(Serialize)]
+pub(crate) struct OllamaTool {
+    #[serde(rename = "type")]
+    tool_type: &'static str,
+    function: OllamaToolFunction,
+}
+
+#[derive(Serialize)]
+pub(crate) struct OllamaToolFunction {
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
+}
+
+pub(crate) fn build_tools(tools: &[ToolSpec]) -> Vec<OllamaTool> {
     tools
         .iter()
-        .map(|tool| ToolInfo {
-            tool_type: ToolType::Function,
-            function: ToolFunctionInfo {
+        .map(|tool| OllamaTool {
+            tool_type: "function",
+            function: OllamaToolFunction {
                 name: tool.name.clone(),
                 description: tool.description.clone(),
-                parameters: serde_json::from_value(tool.parameters.clone()).unwrap_or_else(|_| {
-                    serde_json::from_value(serde_json::json!({})).expect("empty schema")
-                }),
+                parameters: tool.parameters.clone(),
             },
         })
         .collect()
+}
+
+/// The full Ollama request body with correctly-serialised tools.
+#[derive(Serialize)]
+pub(crate) struct OllamaRequestBody {
+    pub(crate) model: String,
+    pub(crate) messages: Vec<OllamaChatMessage>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) tools: Vec<OllamaTool>,
+    pub(crate) stream: bool,
+}
+
+pub(crate) fn build_request_body(
+    model: String,
+    messages: Vec<OllamaChatMessage>,
+    tools: Vec<OllamaTool>,
+) -> OllamaRequestBody {
+    OllamaRequestBody {
+        model,
+        messages,
+        tools,
+        stream: false,
+    }
 }
 
 pub(crate) fn response_to_model_response(
@@ -85,12 +124,3 @@ pub(crate) fn response_to_model_response(
     }
 }
 
-pub(crate) fn build_request(
-    model: String,
-    messages: Vec<OllamaChatMessage>,
-    tools: Vec<ToolInfo>,
-) -> ChatMessageRequest {
-    let mut request = ChatMessageRequest::new(model, messages);
-    request.tools = tools;
-    request
-}

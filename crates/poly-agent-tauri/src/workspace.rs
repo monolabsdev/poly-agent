@@ -190,6 +190,7 @@ pub(crate) fn default_runtime(prepared: PreparedRun) -> Result<AgentRuntime, Age
         AgentRuntimeConfig {
             permission_preset: preset,
             reviewer: None,
+            agent_config: None,
         },
     ))
 }

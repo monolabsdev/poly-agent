@@ -1,56 +1,86 @@
 use crate::{
     error::ProviderError,
-    ollama_types::{build_messages, build_request, build_tools, response_to_model_response},
+    ollama_types::{
+        build_messages, build_request_body, build_tools, response_to_model_response, OllamaRequestBody,
+    },
     traits::{ChatRequest, ModelAdapter, ModelResponse, ModelStream},
 };
+use ollama_rs::generation::chat::ChatMessageResponse;
 use ollama_rs::Ollama;
 use url::Url;
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 
 pub struct OllamaAdapter {
-    client: Ollama,
+    /// Used only for streaming when no tools are present.
+    _client: Ollama,
     model: String,
+    base_url: String,
+    http_client: reqwest::Client,
 }
 
 impl OllamaAdapter {
     pub fn new(model: impl Into<String>, base_url: Option<String>) -> Self {
-        let client = match base_url {
-            Some(url) => Ollama::from_url(Url::parse(&url).expect("invalid Ollama base URL")),
-            None => Ollama::from_url(
-                Url::parse(DEFAULT_OLLAMA_URL).expect("invalid default Ollama URL"),
-            ),
-        };
+        let resolved = base_url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string());
+        let ollama = Ollama::from_url(Url::parse(&resolved).expect("invalid Ollama base URL"));
 
         Self {
-            client,
+            _client: ollama,
             model: model.into(),
+            base_url: resolved,
+            http_client: reqwest::Client::new(),
         }
     }
 
-    pub(crate) fn build_chat_request(
-        &self,
-        request: &ChatRequest,
-    ) -> ollama_rs::generation::chat::request::ChatMessageRequest {
-        build_request(
-            self.model.clone(),
-            build_messages(&request.messages),
-            build_tools(&request.tools),
-        )
+    fn chat_api_url(&self) -> String {
+        format!("{}/api/chat", self.base_url.trim_end_matches('/'))
+    }
+
+    async fn send_non_streaming(&self, body: &OllamaRequestBody) -> Result<ModelResponse, ProviderError> {
+        let res = self
+            .http_client
+            .post(self.chat_api_url())
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| ProviderError::Parse(format!("Ollama request failed: {e}")))?;
+
+        let status = res.status();
+        if !status.is_success() {
+            let text = res.text().await.unwrap_or_default();
+            return Err(ProviderError::Parse(format!("Ollama error ({status}): {text}")));
+        }
+
+        let response: ChatMessageResponse = res
+            .json()
+            .await
+            .map_err(|e| ProviderError::Parse(format!("Failed to deserialize Ollama response: {e}")))?;
+        response_to_model_response(response)
     }
 
     async fn stream_chat(&self, request: ChatRequest) -> Result<ModelStream, ProviderError> {
         if !request.tools.is_empty() {
             tracing::debug!("Ollama tool-call stream fallback: using non-streaming response path");
-            let response = self.chat(request).await?;
+            let response = self.send_non_streaming(
+                &build_request_body(
+                    self.model.clone(),
+                    build_messages(&request.messages),
+                    build_tools(&request.tools),
+                ),
+            )
+            .await?;
             return Ok(Box::pin(async_stream::stream! {
                 yield Ok(response);
             }));
         }
 
-        let request = self.build_chat_request(&request);
+        use ollama_rs::generation::chat::request::ChatMessageRequest;
+        let request = ChatMessageRequest::new(
+            self.model.clone(),
+            build_messages(&request.messages),
+        );
         let stream = self
-            .client
+            ._client
             .send_chat_messages_stream(request)
             .await
             .map_err(map_ollama_error)?;
@@ -68,13 +98,14 @@ impl OllamaAdapter {
 #[async_trait::async_trait]
 impl ModelAdapter for OllamaAdapter {
     async fn chat(&self, request: ChatRequest) -> Result<ModelResponse, ProviderError> {
-        let request = self.build_chat_request(&request);
-        let response = self
-            .client
-            .send_chat_messages(request)
-            .await
-            .map_err(map_ollama_error)?;
-        response_to_model_response(response)
+        self.send_non_streaming(
+            &build_request_body(
+                self.model.clone(),
+                build_messages(&request.messages),
+                build_tools(&request.tools),
+            ),
+        )
+        .await
     }
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ModelStream, ProviderError> {

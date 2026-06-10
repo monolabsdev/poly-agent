@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use poly_agent_core::{ChatMessage, PermissionPreset};
+use poly_agent_core::{AgentConfig, ChatMessage, PermissionPreset};
 use poly_agent_providers::ModelAdapter;
 
+use crate::agent_config::{builtin_agent, BUILD_AGENT};
 use crate::review::{AutoReviewer, ModelAdapterReviewer};
 use crate::tool::ToolRegistry;
 
@@ -11,6 +12,7 @@ pub struct AgentRuntime {
     pub adapter: Arc<dyn ModelAdapter>,
     pub permission_preset: PermissionPreset,
     pub reviewer: Arc<dyn AutoReviewer>,
+    pub agent_config: AgentConfig,
     pub pending_approvals: std::sync::Arc<
         tokio::sync::Mutex<
             std::collections::HashMap<(uuid::Uuid, String), tokio::sync::oneshot::Sender<bool>>,
@@ -26,6 +28,7 @@ pub struct AgentRuntime {
 pub struct AgentRuntimeConfig {
     pub permission_preset: PermissionPreset,
     pub reviewer: Option<Arc<dyn AutoReviewer>>,
+    pub agent_config: Option<AgentConfig>,
 }
 
 impl Default for AgentRuntimeConfig {
@@ -33,13 +36,15 @@ impl Default for AgentRuntimeConfig {
         Self {
             permission_preset: PermissionPreset::Default,
             reviewer: None,
+            agent_config: None,
         }
     }
 }
 
 impl AgentRuntime {
-    /// Backward-compatible constructor. Uses `PermissionPreset::Default` and
-    /// builds a default `ModelAdapterReviewer` from `adapter`.
+    /// Backward-compatible constructor. Uses `PermissionPreset::Default`,
+    /// builds a default `ModelAdapterReviewer` from `adapter`,
+    /// and uses the `general` agent.
     pub fn new(tools: ToolRegistry, adapter: Arc<dyn ModelAdapter>) -> Self {
         Self::with_config(
             tools,
@@ -47,11 +52,13 @@ impl AgentRuntime {
             AgentRuntimeConfig {
                 permission_preset: PermissionPreset::Default,
                 reviewer: None,
+                agent_config: None,
             },
         )
     }
 
     /// Construct a runtime with a custom configuration.
+    /// When `agent_config` is `None`, defaults to the `general` agent.
     pub fn with_config(
         tools: ToolRegistry,
         adapter: Arc<dyn ModelAdapter>,
@@ -60,10 +67,14 @@ impl AgentRuntime {
         let reviewer = config
             .reviewer
             .unwrap_or_else(|| Arc::new(ModelAdapterReviewer::new(adapter.clone())));
+        let agent_config = config
+            .agent_config
+            .unwrap_or_else(|| builtin_agent(BUILD_AGENT).expect("build agent must exist"));
         Self {
             tools,
             adapter,
             permission_preset: config.permission_preset,
+            agent_config,
             reviewer,
             pending_approvals: std::sync::Arc::new(tokio::sync::Mutex::new(
                 std::collections::HashMap::new(),

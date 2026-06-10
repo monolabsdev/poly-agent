@@ -25,3 +25,5 @@ tokio-util = "0.7"
 clap = { version = "4", features = ["derive"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2"
+regex = "1"
+glob = "0.3"

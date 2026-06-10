@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use poly_agent_core::*;
+use crate::agent_config::builtin_agent;
 use poly_agent_providers::{ChatRequest, ModelAdapter, ModelResponse, ProviderError};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -1175,6 +1176,7 @@ fn runtime_with_preset(
         AgentRuntimeConfig {
             permission_preset: preset,
             reviewer,
+            agent_config: builtin_agent("build"),
         },
     )
 }

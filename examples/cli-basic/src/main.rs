@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
-use poly_agent_core::PermissionPreset;
+use poly_agent_core::{AgentConfig, PermissionPreset};
 use poly_agent_providers::{ModelAdapter, OllamaAdapter, OpenAICompatibleAdapter};
-use poly_agent_runtime::{AgentRuntime, AgentRuntimeConfig, ToolRegistry};
+use poly_agent_runtime::{builtin_agent, AgentRuntime, AgentRuntimeConfig, ToolRegistry};
 
 use crate::chat::run_chat;
 use crate::config::SessionConfig;
@@ -33,6 +33,8 @@ struct Cli {
     debug: bool,
     #[arg(long, value_enum, default_value_t = PresetArg::Default)]
     preset: PresetArg,
+    #[arg(long, default_value_t = String::from("general"))]
+    agent: String,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
@@ -70,6 +72,12 @@ async fn main() -> anyhow::Result<()> {
         .compact()
         .init();
 
+    let agent_config: Option<AgentConfig> = if cli.agent == "general" || cli.agent == "build" || cli.agent == "explore" {
+        builtin_agent(&cli.agent)
+    } else {
+        None
+    };
+
     if cli.debug {
         eprintln!("DEBUG Configuration:");
         eprintln!("  Provider: {}", cli.provider);
@@ -78,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("  Base URL: {}", url);
         }
         eprintln!("  Workspace: {:?}", cli.workspace);
+        eprintln!("  Agent: {}", cli.agent);
     }
 
     let adapter: Arc<dyn ModelAdapter> = match cli.provider.as_str() {
@@ -107,6 +116,7 @@ async fn main() -> anyhow::Result<()> {
         AgentRuntimeConfig {
             permission_preset: preset,
             reviewer: None,
+            agent_config,
         },
     ));
     let config = SessionConfig {

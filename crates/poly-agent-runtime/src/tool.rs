@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use poly_agent_core::{RuntimeLimits, ToolResult, ToolRisk};
+use poly_agent_core::{AgentConfig, RuntimeLimits, ToolResult, ToolRisk};
 use tokio_util::sync::CancellationToken;
 
 /// Context passed to each tool invocation.
@@ -67,6 +67,45 @@ impl ToolRegistry {
                 parameters: t.parameters_schema(),
             })
             .collect()
+    }
+
+    /// Return the names of all registered tools.
+    pub fn names(&self) -> Vec<&'static str> {
+        self.tools.keys().copied().collect()
+    }
+
+    /// Return tool specs filtered by agent configuration.
+    /// When `allowed_tools` is empty, all tools except dangerous ones (unless allow_dangerous) are included.
+    /// When `allowed_tools` is non-empty, only those tools are included.
+    pub fn tool_specs_for_agent(&self, config: &AgentConfig) -> Vec<poly_agent_providers::ToolSpec> {
+        self.tools
+            .values()
+            .filter(|t| self.is_tool_allowed(t, config))
+            .map(|t| poly_agent_providers::ToolSpec {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                parameters: t.parameters_schema(),
+            })
+            .collect()
+    }
+
+    /// Check whether a given tool is allowed per the agent configuration.
+    fn is_tool_allowed(&self, tool: &Arc<dyn AgentTool>, config: &AgentConfig) -> bool {
+        // If allowed_tools is non-empty, only include explicitly listed tools.
+        if !config.allowed_tools.is_empty() {
+            return config.allowed_tools.contains(&tool.name().to_string());
+        }
+        // Empty allowed_tools means all safe tools by default.
+        // Dangerous tools require allow_dangerous.
+        if tool.risk() == poly_agent_core::ToolRisk::Dangerous {
+            return config.allow_dangerous;
+        }
+        true
+    }
+
+    /// Check whether a named tool is available for the given agent config.
+    pub fn is_available(&self, name: &str, config: &AgentConfig) -> bool {
+        self.tools.get(name).is_some_and(|t| self.is_tool_allowed(t, config))
     }
 
     /// Number of registered tools.

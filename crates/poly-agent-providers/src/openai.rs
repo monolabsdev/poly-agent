@@ -171,6 +171,7 @@ impl ModelAdapter for OpenAICompatibleAdapter {
             model: self.model.clone(),
             messages: Self::build_messages(&request.messages),
             tools: Self::build_tools(&request.tools),
+            tool_choice: if request.tools.is_empty() { None } else { Some("auto".to_string()) },
             stream: false,
         };
 
@@ -208,6 +209,7 @@ impl ModelAdapter for OpenAICompatibleAdapter {
             model: self.model.clone(),
             messages: Self::build_messages(&request.messages),
             tools: None,
+            tool_choice: None,
             stream: true,
         };
 
@@ -255,6 +257,8 @@ struct OpenAIRequest {
     messages: Vec<OpenAIMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<OpenAITool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<String>,
     stream: bool,
 }
 
