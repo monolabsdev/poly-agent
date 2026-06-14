@@ -102,33 +102,29 @@ impl AgentRunManager {
         approval_id: &str,
     ) -> Result<(), AgentRunError> {
         let slot = self.slot(run_id).await?;
-        let runtime_run_id = {
-            let mut state = slot.state.lock().await;
-            if state
-                .pending_approval
-                .as_ref()
-                .map(|a| a.approval_id.as_str())
-                != Some(approval_id)
-            {
-                if matches!(
-                    state.status,
-                    RunStatus::Running | RunStatus::Finished | RunStatus::Failed | RunStatus::Cancelled
-                ) {
-                    return Ok(());
-                }
-                return Err(AgentRunError::ApprovalNotFound(run_id));
-            }
-            state.status = RunStatus::Running;
-            state.pending_approval = None;
-            state.runtime_run_id
-        };
+        let runtime_run_id = { slot.state.lock().await.runtime_run_id };
         let runtime_run_id = runtime_run_id.ok_or_else(|| {
             AgentRunError::Other(format!("run {run_id} has not started in runtime"))
         })?;
         slot.runtime
             .approve_tool(runtime_run_id, approval_id)
             .await
-            .map_err(|err| AgentRunError::Other(err.to_string()))
+            .map_err(|err| AgentRunError::Other(err.to_string()))?;
+        {
+            let mut state = slot.state.lock().await;
+            if state
+                .pending_approval
+                .as_ref()
+                .map(|a| a.approval_id.as_str())
+                == Some(approval_id)
+            {
+                state.pending_approval = None;
+            }
+            if state.status == RunStatus::WaitingForApproval {
+                state.status = RunStatus::Running;
+            }
+        }
+        Ok(())
     }
 
     pub async fn reject_tool_call(
@@ -137,33 +133,29 @@ impl AgentRunManager {
         approval_id: &str,
     ) -> Result<(), AgentRunError> {
         let slot = self.slot(run_id).await?;
-        let runtime_run_id = {
-            let mut state = slot.state.lock().await;
-            if state
-                .pending_approval
-                .as_ref()
-                .map(|a| a.approval_id.as_str())
-                != Some(approval_id)
-            {
-                if matches!(
-                    state.status,
-                    RunStatus::Running | RunStatus::Finished | RunStatus::Failed | RunStatus::Cancelled
-                ) {
-                    return Ok(());
-                }
-                return Err(AgentRunError::ApprovalNotFound(run_id));
-            }
-            state.status = RunStatus::Running;
-            state.pending_approval = None;
-            state.runtime_run_id
-        };
+        let runtime_run_id = { slot.state.lock().await.runtime_run_id };
         let runtime_run_id = runtime_run_id.ok_or_else(|| {
             AgentRunError::Other(format!("run {run_id} has not started in runtime"))
         })?;
         slot.runtime
             .reject_tool(runtime_run_id, approval_id)
             .await
-            .map_err(|err| AgentRunError::Other(err.to_string()))
+            .map_err(|err| AgentRunError::Other(err.to_string()))?;
+        {
+            let mut state = slot.state.lock().await;
+            if state
+                .pending_approval
+                .as_ref()
+                .map(|a| a.approval_id.as_str())
+                == Some(approval_id)
+            {
+                state.pending_approval = None;
+            }
+            if state.status == RunStatus::WaitingForApproval {
+                state.status = RunStatus::Running;
+            }
+        }
+        Ok(())
     }
 
     pub async fn get_run_state(&self, run_id: RunId) -> Result<RunStateSnapshot, AgentRunError> {
