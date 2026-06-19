@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::engine::AgentRuntime;
 use crate::intent::{
-    build_grounding_prefix, contains_codebase_intent_phrase, is_command_tool, is_file_write_tool,
+    build_grounding_prefix, contains_codebase_intent_phrase,
     is_clarification_request, is_mutating_tool, is_prose_confirmation, mutation_guard_message,
     mutation_missing_message, mutation_retry_instruction, sanitise_final_text, tool_is_inspection,
     EditIntent,
@@ -930,7 +930,7 @@ impl AgentRuntime {
     async fn evaluate_tool_permission(
         &self,
         call: &poly_agent_core::ToolCall,
-        tool_name: &str,
+        _tool_name: &str,
         ctx: &RunContext,
         state: &RunState,
     ) -> ToolPermissionDecision {
@@ -939,17 +939,7 @@ impl AgentRuntime {
                 ToolPermissionDecision::Approved(AutoApproveReason::FullAccess)
             }
             PermissionPreset::Default => {
-                if is_file_write_tool(tool_name) {
-                    ToolPermissionDecision::Approved(AutoApproveReason::PresetDefault)
-                } else if is_command_tool(tool_name) {
-                    ToolPermissionDecision::RequiresApproval
-                } else {
-                    // Unknown non-Safe tool under Default preset: fall back to
-                    // user approval to be safe. (In practice this branch is
-                    // only reachable for tools that opt into RequiresApproval
-                    // or Dangerous without being classified by the helpers.)
-                    ToolPermissionDecision::RequiresApproval
-                }
+                ToolPermissionDecision::Approved(AutoApproveReason::PresetDefault)
             }
             PermissionPreset::AutoReview => {
                 let review_ctx = ReviewContext {

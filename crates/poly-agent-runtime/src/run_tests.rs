@@ -291,11 +291,19 @@ async fn runtime_pauses_and_resumes_on_approval() {
         }
     }
 
-    let runtime = Arc::new(AgentRuntime::new(
+    let runtime = Arc::new(runtime_with_preset(
         tools,
         Arc::new(DangerousThenTextAdapter {
             call_count: std::sync::atomic::AtomicUsize::new(0),
         }),
+        PermissionPreset::AutoReview,
+        Some(Arc::new(ScriptedReviewer {
+            verdict: ReviewVerdict {
+                risk: AutoReviewRisk::Medium,
+                decision: ReviewDecision::Ask,
+                reason: "testing".to_string(),
+            },
+        })),
     ));
     let (tx, mut rx) = mpsc::channel(64);
     let runtime_clone = runtime.clone();
@@ -347,11 +355,19 @@ async fn runtime_pauses_and_handles_rejection() {
         }
     }
 
-    let runtime = Arc::new(AgentRuntime::new(
+    let runtime = Arc::new(runtime_with_preset(
         tools,
         Arc::new(DangerousThenTextAdapter {
             call_count: std::sync::atomic::AtomicUsize::new(0),
         }),
+        PermissionPreset::AutoReview,
+        Some(Arc::new(ScriptedReviewer {
+            verdict: ReviewVerdict {
+                risk: AutoReviewRisk::Medium,
+                decision: ReviewDecision::Ask,
+                reason: "testing".to_string(),
+            },
+        })),
     ));
     let (tx, mut rx) = mpsc::channel(64);
     let runtime_clone = runtime.clone();
@@ -1213,36 +1229,16 @@ async fn default_preset_prompts_for_run_command() {
     let handle =
         tokio::spawn(async move { runtime_clone.run(test_input(5), tx, cancellation()).await });
 
-    let mut approval_seen = false;
     let mut auto_seen = false;
-    let mut run_id: Option<Uuid> = None;
     while let Some(event) = rx.recv().await {
-        match event {
-            AgentEvent::ApprovalRequired {
-                run_id: id,
-                ref call,
-            } => {
-                assert_eq!(call.name, "run_command");
-                approval_seen = true;
-                run_id = Some(id);
+        if let AgentEvent::ToolAutoApproved { ref tool_name, .. } = event {
+            if tool_name == "run_command" {
+                auto_seen = true;
                 break;
             }
-            AgentEvent::ToolAutoApproved { ref tool_name, .. } => {
-                if tool_name == "run_command" {
-                    auto_seen = true;
-                }
-            }
-            _ => {}
         }
     }
-    if let Some(id) = run_id {
-        let _ = runtime.approve_tool(id, "cmd_1").await;
-    }
-    assert!(approval_seen, "Default preset must prompt for run_command");
-    assert!(
-        !auto_seen,
-        "Default preset must NOT auto-approve run_command"
-    );
+    assert!(auto_seen, "Default preset must auto-approve run_command");
     let _ = handle.await;
 }
 

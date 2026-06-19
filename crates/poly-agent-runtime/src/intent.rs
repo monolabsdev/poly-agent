@@ -21,9 +21,11 @@ pub const MUTATING_TOOLS: &[&str] = &["apply_patch", "write_file", "delete_file"
 pub const INSPECTION_TOOLS: &[&str] = &["inspect_project", "read_important_files"];
 
 /// Tools that execute shell commands inside the workspace.
+#[allow(dead_code)]
 pub const COMMAND_TOOLS: &[&str] = &["run_command"];
 
 /// Tools that write file contents (creation or replacement).
+#[allow(dead_code)]
 pub const FILE_WRITE_TOOLS: &[&str] = &["apply_patch", "write_file"];
 
 pub fn tool_is_inspection(name: &str) -> bool {
@@ -31,11 +33,13 @@ pub fn tool_is_inspection(name: &str) -> bool {
 }
 
 /// True if `name` is a command-execution tool.
+#[allow(dead_code)]
 pub fn is_command_tool(name: &str) -> bool {
     COMMAND_TOOLS.contains(&name)
 }
 
 /// True if `name` is a file-write tool.
+#[allow(dead_code)]
 pub fn is_file_write_tool(name: &str) -> bool {
     FILE_WRITE_TOOLS.contains(&name)
 }
