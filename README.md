@@ -1,27 +1,28 @@
 # poly-agent
 
-A minimal, low-RAM Rust agent runtime for [Poly UI](https://github.com/monolabsdev/poly-ui).
+> [!WARNING]
+> This project is no longer being developed and is now deprecated.
 
-### **Roadmap:** https://sites.plane.so/issues/9daa9cad37034deaaaf000cf84c77b73
+A minimal, low-RAM Rust agent runtime for [Poly UI](https://github.com/monolabsdev/poly-ui).
 
 ## What this is
 
-- An internal AI agent runtime written in Rust
-- Designed for the Poly UI Tauri desktop app
-- Supports Ollama and OpenAI-compatible APIs
-- Provides safe, sandboxed local tool execution
-- Prioritises low memory usage and speed
+* An internal AI agent runtime written in Rust
+* Designed for the Poly UI Tauri desktop app
+* Supports Ollama and OpenAI-compatible APIs
+* Provides safe, sandboxed local tool execution
+* Prioritises low memory usage and speed
 
 ## What this is NOT
 
-- Not a general-purpose agent framework
-- Not a plugin marketplace or SDK
-- Not a multi-agent orchestration system
-- Not a vector database or memory system
+* Not a general-purpose agent framework
+* Not a plugin marketplace or SDK
+* Not a multi-agent orchestration system
+* Not a vector database or memory system
 
 ## Architecture
 
-```
+```text
 poly-agent/
 ├── crates/
 │   ├── poly-agent-core/       # Shared types, events, errors
